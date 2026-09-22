@@ -51,6 +51,13 @@ lib.homomorphic_xor.restype = None
 
 LWE_N = 512
 
+
+def _vector(value: np.ndarray, length: int, name: str) -> np.ndarray:
+    array = np.asarray(value, dtype=np.uint32)
+    if array.shape != (length,):
+        raise ValueError(f"{name} must have shape ({length},).")
+    return np.ascontiguousarray(array)
+
 def generate_key() -> np.ndarray:
     """Generate a random LWE secret key of dimension 512."""
     key = np.zeros(LWE_N, dtype=np.uint32)
@@ -64,6 +71,10 @@ def encrypt_bitmask(key: np.ndarray, bitmask: np.ndarray) -> Tuple[np.ndarray, n
         enc_a: Shape (len(bitmask), LWE_N) - uint32 matrix
         enc_b: Shape (len(bitmask),) - uint32 vector
     """
+    key = _vector(key, LWE_N, "secret_key")
+    bitmask = np.asarray(bitmask, dtype=np.uint32)
+    if bitmask.ndim != 1 or not np.isin(bitmask, (0, 1)).all():
+        raise ValueError("bitmask must be a one-dimensional binary array.")
     num_bits = len(bitmask)
     enc_a = np.zeros((num_bits, LWE_N), dtype=np.uint32)
     enc_b = np.zeros(num_bits, dtype=np.uint32)
@@ -88,6 +99,10 @@ def encrypt_bitmask(key: np.ndarray, bitmask: np.ndarray) -> Tuple[np.ndarray, n
 
 def decrypt_distance(key: np.ndarray, enc_a_sum: np.ndarray, enc_b_sum: int) -> int:
     """Decrypt the homomorphically computed Hamming distance."""
+    key = _vector(key, LWE_N, "secret_key")
+    enc_a_sum = _vector(enc_a_sum, LWE_N, "enc_a_sum")
+    if not 0 <= int(enc_b_sum) <= 0xFFFFFFFF:
+        raise ValueError("enc_b_sum must be a uint32 value.")
     key_ptr = key.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
     a_ptr = enc_a_sum.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
     return int(lib.decrypt_distance(key_ptr, LWE_N, a_ptr, ctypes.c_uint32(enc_b_sum)))
@@ -103,9 +118,15 @@ def evaluate_distance_homomorphically(
         a_sum: Vector of length LWE_N
         b_sum: Scalar integer sum
     """
+    public_bitmask = np.asarray(public_bitmask, dtype=np.uint32)
+    if public_bitmask.ndim != 1 or not np.isin(public_bitmask, (0, 1)).all():
+        raise ValueError("public_bitmask must be a one-dimensional binary array.")
     num_bits = len(public_bitmask)
-    if num_bits != len(enc_b):
-        raise ValueError("Bitmask lengths do not match encrypted query dimension.")
+    enc_b = _vector(enc_b, num_bits, "enc_b")
+    enc_a = np.asarray(enc_a, dtype=np.uint32)
+    if enc_a.shape != (num_bits, LWE_N):
+        raise ValueError(f"enc_a must have shape ({num_bits}, {LWE_N}).")
+    enc_a = np.ascontiguousarray(enc_a)
         
     a_sum = np.zeros(LWE_N, dtype=np.uint32)
     b_sum = 0

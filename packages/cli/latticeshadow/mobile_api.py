@@ -4,6 +4,7 @@ import json
 import secrets
 import time
 import threading
+import ipaddress
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from typing import Dict, List
@@ -14,10 +15,38 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 MAX_REQUEST_BYTES = 64 * 1024
 PAIR_ATTEMPT_WINDOW_SECONDS = 60
 MAX_PAIR_ATTEMPTS = 5
+MAX_CONNECTIONS = 16
+SOCKET_TIMEOUT_SECONDS = 10
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = MAX_CONNECTIONS
+
+    def __init__(self, *args, **kwargs):
+        self._connection_slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, address = super().get_request()
+        request.settimeout(SOCKET_TIMEOUT_SECONDS)
+        return request, address
+
+    def process_request(self, request, client_address):
+        if not self._connection_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connection_slots.release()
 
 class MobileAPIHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -47,6 +76,9 @@ class MobileAPIHandler(BaseHTTPRequestHandler):
         try:
             content_length = int(self.headers.get("Content-Length", 0))
         except ValueError:
+            self._send_response(400, {"error": "Invalid Content-Length header"})
+            return
+        if content_length < 0:
             self._send_response(400, {"error": "Invalid Content-Length header"})
             return
         if content_length > MAX_REQUEST_BYTES:
@@ -167,6 +199,12 @@ class MobileAPIServer:
         return self.pairing_code
 
     def start(self):
+        try:
+            address = ipaddress.ip_address(self.host)
+        except ValueError as exc:
+            raise ValueError("Mobile API host must be a numeric loopback address") from exc
+        if address.version != 4 or not address.is_loopback:
+            raise ValueError("Mobile API requires an IPv4 loopback host")
         self.server = ThreadingHTTPServer((self.host, self.port), MobileAPIHandler)
         self.host, self.port = self.server.server_address[:2]
         # Pass self references to the handler via server properties
@@ -178,42 +216,6 @@ class MobileAPIServer:
         
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
-        self.write_icloud_handshake()
-
-    def write_icloud_handshake(self):
-        """Write configuration profile to iCloud for zero-touch configuration."""
-        try:
-            import socket
-            
-            # Resolve iCloud directory path
-            icloud_dir = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/LatticeShadow")
-            if not os.path.exists(icloud_dir):
-                return
-                
-            # Resolve local IP
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-            except Exception:
-                local_ip = "127.0.0.1"
-            finally:
-                s.close()
-                
-            handshake_path = os.path.join(icloud_dir, "handshake.json")
-            handshake_data = {
-                "ip": local_ip,
-                "port": self.port,
-                "pairing_code": self.pairing_code,
-                "timestamp": time.time()
-            }
-            
-            temp_path = handshake_path + ".tmp"
-            with open(temp_path, "w") as f:
-                json.dump(handshake_data, f)
-            os.replace(temp_path, handshake_path)
-        except Exception:
-            pass
 
     def stop(self):
         if self.server:

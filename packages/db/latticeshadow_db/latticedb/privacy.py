@@ -256,17 +256,10 @@ class PrivacyEngine:
             except Exception as e:
                 logger.debug("Keyring unavailable: %s", e)
 
-        # Fallback: deterministic key from hostname (NOT secure, but functional)
-        # This ensures connect() never fails, while emitting a loud warning.
-        import platform
-        fallback = secrets.token_urlsafe(32)
-        logger.warning(
-            "No master key found (no explicit key, no %s env var, no keyring). "
-            "Using an ephemeral key — data will NOT be recoverable after restart. "
-            "Set %s for persistent encryption.",
-            self.ENV_VAR, self.ENV_VAR,
+        raise RuntimeError(
+            "No persistent master key is available. Supply master_key, set "
+            f"{self.ENV_VAR}, or configure a working OS keyring before enabling privacy."
         )
-        return fallback
 
     # ── Envelope Encryption (AES-GCM) ─────────────────────────────────────
 

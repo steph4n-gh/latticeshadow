@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from latticeshadow_db.cloud_server import CONFIG, app
 from latticeshadow_db.latticedb import Collection, PrivacyEngine
+from latticeshadow_db.latticedb import connect
+from latticeshadow_db.latticedb import privacy as privacy_module
 from latticeshadow_db.latticedb.distiller import AutoDistiller
 from latticeshadow_db.latticedb.drosophila import DrosophilaHasher, MAX_FLYHASH_INPUT_DIM
 from latticeshadow_db.latticedb.holographic import (
@@ -41,6 +43,13 @@ def test_cloud_server_requires_configured_api_key(cloud_config):
     response = client.post("/v1/align", json={"obfuscated_state": [[1.0, 2.0]]})
 
     assert response.status_code == 503
+
+
+def test_privacy_mode_requires_persistent_master_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("LATTICEDB_MASTER_KEY", raising=False)
+    monkeypatch.setattr(privacy_module, "_KEYRING_AVAILABLE", False)
+    with pytest.raises(RuntimeError, match="persistent master key"):
+        connect(db_path=str(tmp_path / "private.sqlite"), privacy=True)
 
 
 def test_cloud_server_rejects_default_secret_and_oversized_payload(cloud_config):

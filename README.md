@@ -82,9 +82,13 @@ configuration has no cloud LLM provider; optional sync and assistant features
 can make network requests when used or configured. The client encrypts
 document text, while IDs and metadata remain readable in SQLite. Its
 reversible vector rotation preserves similarity geometry, so rotated vectors
-are not opaque ciphertext. Key storage can
-fall back when platform protection is unavailable. Simulated P2P proofs are not
-zk-SNARKs. There has been no independent security review.
+are not opaque ciphertext. Key storage can fall back when platform protection
+is unavailable. Simulated P2P proofs are not zk-SNARKs. There has been no
+independent security review.
+
+iCloud sync writes encrypted packets while the live vault and keys stay local.
+Older installations that stored their live vault in iCloud need the
+[migration steps](docs/GETTING_STARTED.md) before restarting with sync enabled.
 
 `shadow forget` removes selected events from the active local indexes. It is not
 a promise to erase old backups, synced copies, or every trace from a filesystem.

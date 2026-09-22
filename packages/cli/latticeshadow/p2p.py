@@ -49,6 +49,35 @@ def verify_distance_snark_proof(proof: dict, a_sum: np.ndarray, b_sum: int, thre
 
 MULTICAST_GRP = "224.0.0.1"
 MULTICAST_PORT = 5050
+MAX_FRAME_BYTES = 4 * 1024 * 1024
+MAX_CONNECTIONS = 8
+SOCKET_TIMEOUT = 3.0
+
+
+def _read_frame(conn: socket.socket) -> bytes:
+    timeout = conn.gettimeout()
+    deadline = time.monotonic() + (timeout if timeout is not None else SOCKET_TIMEOUT)
+
+    def read_exact(length: int) -> bytes:
+        data = bytearray()
+        while len(data) < length:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Mesh frame read timed out.")
+            conn.settimeout(remaining)
+            packet = conn.recv(length - len(data))
+            if not packet:
+                raise EOFError("Incomplete mesh frame.")
+            data.extend(packet)
+        return bytes(data)
+
+    try:
+        msg_len = struct.unpack("!I", read_exact(4))[0]
+        if not 0 < msg_len <= MAX_FRAME_BYTES:
+            raise ValueError("Mesh frame exceeds the size limit.")
+        return read_exact(msg_len)
+    finally:
+        conn.settimeout(timeout)
 
 class LocalMeshNode:
     def __init__(self, node_id: str, vault, port: int = MULTICAST_PORT, data_dir: str | None = None):
@@ -58,6 +87,7 @@ class LocalMeshNode:
         self.peers: Dict[str, Tuple[str, int, float]] = {}  # node_id -> (ip, tcp_port, last_seen)
         self.running = False
         self.on_sync_callback = None
+        self._connection_slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         
         # Sockets
         self.multicast_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -158,35 +188,42 @@ class LocalMeshNode:
     def _tcp_accept_loop(self):
         while self.running:
             try:
-                conn, addr = self.tcp_server.accept()
-                t = threading.Thread(target=self._handle_tcp_connection, args=(conn,), daemon=True)
+                conn, _ = self.tcp_server.accept()
+            except Exception:
+                continue
+            if not self._connection_slots.acquire(blocking=False):
+                conn.close()
+                continue
+            try:
+                t = threading.Thread(
+                    target=self._handle_tcp_connection,
+                    args=(conn, True),
+                    daemon=True,
+                )
                 t.start()
             except Exception:
-                pass
+                conn.close()
+                self._connection_slots.release()
 
-    def _handle_tcp_connection(self, conn: socket.socket):
+    def _handle_tcp_connection(self, conn: socket.socket, release_slot: bool = False):
         try:
-            # Read JSON payload length (4 bytes prefix)
-            raw_len = conn.recv(4)
-            if not raw_len:
-                return
-            msg_len = struct.unpack("!I", raw_len)[0]
-            
-            # Read complete JSON payload
-            data = bytearray()
-            while len(data) < msg_len:
-                packet = conn.recv(msg_len - len(data))
-                if not packet:
-                    break
-                data.extend(packet)
-            
-            payload = json.loads(data.decode("utf-8"))
+            conn.settimeout(SOCKET_TIMEOUT)
+            payload = json.loads(_read_frame(conn).decode("utf-8"))
             p_type = payload.get("type")
             
             if p_type == "QUERY":
+                verified, _ = self.trust_store.verify_payload(payload)
+                if not verified:
+                    return
                 responses = self._handle_incoming_query(payload)
-                # Send back responses over same TCP connection
-                resp_data = json.dumps(responses).encode("utf-8")
+                response = self.trust_store.sign_payload({
+                    "type": "QUERY_RESULT",
+                    "node_id": self.node_id,
+                    "responses": responses,
+                })
+                resp_data = json.dumps(response).encode("utf-8")
+                if len(resp_data) > MAX_FRAME_BYTES:
+                    return
                 conn.sendall(struct.pack("!I", len(resp_data)) + resp_data)
             elif p_type == "SYNC":
                 self._handle_incoming_sync(payload)
@@ -196,6 +233,8 @@ class LocalMeshNode:
             pass
         finally:
             conn.close()
+            if release_slot:
+                self._connection_slots.release()
 
     def _handle_incoming_query(self, payload: dict) -> List[dict]:
         """Perform homomorphic distance calculation and return matching payloads."""
@@ -203,6 +242,8 @@ class LocalMeshNode:
         try:
             enc_a = np.array(payload["enc_a"], dtype=np.uint32)
             enc_b = np.array(payload["enc_b"], dtype=np.uint32)
+            if enc_a.shape != (128, homomorphic.LWE_N) or enc_b.shape != (128,):
+                return results
             
             # Fetch all local Drosophila binary hashes
             with self.vault._store._connect() as conn:
@@ -249,18 +290,27 @@ class LocalMeshNode:
             "enc_a": enc_a.tolist(),
             "enc_b": enc_b.tolist()
         }
+        payload = self.trust_store.sign_payload(payload)
         
         payload_data = json.dumps(payload).encode("utf-8")
+        if len(payload_data) > MAX_FRAME_BYTES:
+            raise ValueError("Encrypted query exceeds the mesh frame size limit.")
         header = struct.pack("!I", len(payload_data))
         
         matches = []
         
         # Query active peers
         active_peers = list(self.peers.items())
+        trusted_peer_ids = {
+            device["node_id"]
+            for device in self.trust_store.list_devices()
+            if isinstance(device.get("node_id"), str) and not device.get("revoked")
+        }
         for peer_id, (ip, tcp_port, last_seen) in active_peers:
-            if time.time() - last_seen > 10:
+            if peer_id not in trusted_peer_ids or time.time() - last_seen > 10:
                 continue
-                
+
+            sock = None
             try:
                 # Log simulated CoreBluetooth search
                 print(f"[CoreBluetooth BLE] Advertising query service UUID 0xFD84. Connecting to peer {peer_id}...")
@@ -271,47 +321,57 @@ class LocalMeshNode:
                 
                 sock.sendall(header + payload_data)
                 
-                raw_len = sock.recv(4)
-                if not raw_len:
-                    sock.close()
+                response = json.loads(_read_frame(sock).decode("utf-8"))
+                if (
+                    not isinstance(response, dict)
+                    or response.get("type") != "QUERY_RESULT"
+                    or response.get("node_id") != peer_id
+                ):
                     continue
-                msg_len = struct.unpack("!I", raw_len)[0]
-                
-                data = bytearray()
-                while len(data) < msg_len:
-                    packet = sock.recv(msg_len - len(data))
-                    if not packet:
-                        break
-                    data.extend(packet)
-                
-                responses = json.loads(data.decode("utf-8"))
+                verified, _ = self.trust_store.verify_payload(response)
+                if not verified:
+                    continue
+                responses = response.get("responses")
+                if not isinstance(responses, list):
+                    continue
                 for resp in responses:
-                    a_sum = np.array(resp["a_sum"], dtype=np.uint32)
-                    b_sum = resp["b_sum"]
-                    proof = resp.get("proof")
-                    
-                    # Verify the zk-SNARK proof before decrypting
-                    if proof and verify_distance_snark_proof(proof, a_sum, b_sum, 35):
-                        dist = homomorphic.decrypt_distance(secret_key, a_sum, b_sum)
-                        if dist <= threshold:
-                            try:
-                                if hasattr(self.vault, "_privacy") and self.vault._privacy:
-                                    decrypted_doc = self.vault._privacy.decrypt_document(resp["document"])
-                                else:
+                    try:
+                        if not isinstance(resp, dict) or resp.get("node_id") != peer_id:
+                            continue
+                        a_sum = np.array(resp["a_sum"], dtype=np.uint32)
+                        if a_sum.shape != (homomorphic.LWE_N,):
+                            continue
+                        b_sum = int(resp["b_sum"])
+                        if not 0 <= b_sum <= 0xFFFFFFFF:
+                            continue
+                        proof = resp.get("proof")
+
+                        # Verify the simulated proof before decrypting.
+                        if proof and verify_distance_snark_proof(proof, a_sum, b_sum, 35):
+                            dist = homomorphic.decrypt_distance(secret_key, a_sum, b_sum)
+                            if dist <= threshold:
+                                try:
+                                    if hasattr(self.vault, "_privacy") and self.vault._privacy:
+                                        decrypted_doc = self.vault._privacy.decrypt_document(resp["document"])
+                                    else:
+                                        decrypted_doc = resp["document"]
+                                except Exception:
                                     decrypted_doc = resp["document"]
-                            except Exception:
-                                decrypted_doc = resp["document"]
-                                
-                            matches.append({
-                                "node_id": resp["node_id"],
-                                "doc_id": resp["doc_id"],
-                                "document": decrypted_doc,
-                                "distance": dist,
-                                "proof_valid": True
-                            })
-                sock.close()
+
+                                matches.append({
+                                    "node_id": resp["node_id"],
+                                    "doc_id": resp["doc_id"],
+                                    "document": decrypted_doc,
+                                    "distance": dist,
+                                    "proof_valid": True
+                                })
+                    except (KeyError, TypeError, ValueError, IndexError):
+                        continue
             except Exception:
                 pass
+            finally:
+                if sock is not None:
+                    sock.close()
                 
         return matches
 

@@ -82,15 +82,17 @@ def _send_via_ns_user_notification(title: str, message: str) -> None:
     loop.runUntilDate_(_NSDate.dateWithTimeIntervalSinceNow_(0.15))
 
 
+def _applescript_literal(value: str) -> str:
+    """Encode notification text as one AppleScript string literal."""
+    clean = "".join(char if char.isprintable() else " " for char in value)
+    return '"' + clean.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
 def _send_via_osascript(title: str, message: str) -> None:
     """
     Sends a notification banner using macOS osascript as a fallback.
     """
-    # Escape double quotes and backslashes in title and message to prevent AppleScript syntax errors
-    safe_title = title.replace('\\', '\\\\').replace('"', '\\"')
-    safe_msg = message.replace('\\', '\\\\').replace('"', '\\"')
-    
-    cmd = ["osascript", "-e", f'display notification "{safe_msg}" with title "{safe_title}"']
+    cmd = ["osascript", "-e", f"display notification {_applescript_literal(message)} with title {_applescript_literal(title)}"]
     
     # Run synchronously within the background thread
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)

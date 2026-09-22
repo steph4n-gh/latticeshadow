@@ -1,5 +1,7 @@
 import os
 import asyncio
+import hmac
+import hashlib
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Security, status
@@ -8,12 +10,15 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 from latticeshadow_db.latticedb import connect, Collection
+from latticeshadow_db.http_limits import NonlocalTlsGuard, RequestBodyLimit, is_loopback_host
 
 app = FastAPI(
     title="LatticeDB REST Lock Server",
     description="Production-ready REST API for LatticeDB with Bearer Token auth and transaction serialization locks.",
     version="1.0.0"
 )
+app.add_middleware(RequestBodyLimit, max_bytes=8 * 1024 * 1024)
+app.add_middleware(NonlocalTlsGuard)
 
 security = HTTPBearer()
 
@@ -114,15 +119,29 @@ def get_master_key() -> str:
         )
     return master_key
 
+def get_api_token() -> str:
+    token = os.environ.get("LATTICEDB_API_TOKEN")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LATTICEDB_API_TOKEN is not configured on the server."
+        )
+    if hmac.compare_digest(token.encode("utf-8"), get_master_key().encode("utf-8")):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LATTICEDB_API_TOKEN must differ from LATTICEDB_MASTER_KEY."
+        )
+    return token
+
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)) -> str:
-    """Verify that the Bearer token matches the LATTICEDB_MASTER_KEY."""
-    master_key = get_master_key()
-    if credentials.credentials != master_key:
+    """Verify the dedicated REST credential, never the encryption master key."""
+    api_token = get_api_token()
+    if not hmac.compare_digest(credentials.credentials.encode("utf-8"), api_token.encode("utf-8")):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing authentication token."
         )
-    return credentials.credentials
+    return api_token
 
 async def get_cached_collection(
     collection_name: str,
@@ -165,6 +184,7 @@ async def get_cached_collection(
         hnsw_ef_construction,
         hnsw_ef_search,
         hnsw_candidate_cap,
+        hashlib.sha256(master_key.encode("utf-8")).digest(),
     )
     async with _cache_lock:
         if cache_key not in _collections_cache:
@@ -234,10 +254,6 @@ class ClearRequest(BaseModel):
 class ShredRequest(BaseModel):
     config: CollectionConfig
 
-class RotateRequest(BaseModel):
-    config: CollectionConfig
-    new_master_key: str
-
 class ImportRequest(BaseModel):
     config: CollectionConfig
     backup_data: Dict[str, Any]
@@ -267,7 +283,7 @@ async def add_documents(
         hnsw_ef_construction=req.config.hnsw_ef_construction,
         hnsw_ef_search=req.config.hnsw_ef_search,
         hnsw_candidate_cap=req.config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     write_lock = await get_db_write_lock(req.config.db_path)
@@ -316,7 +332,7 @@ async def search_collection(
         hnsw_ef_construction=req.config.hnsw_ef_construction,
         hnsw_ef_search=req.config.hnsw_ef_search,
         hnsw_candidate_cap=req.config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     try:
@@ -376,7 +392,7 @@ async def delete_documents(
         hnsw_ef_construction=req.config.hnsw_ef_construction,
         hnsw_ef_search=req.config.hnsw_ef_search,
         hnsw_candidate_cap=req.config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     write_lock = await get_db_write_lock(req.config.db_path)
@@ -413,7 +429,7 @@ async def clear_collection(
         hnsw_ef_construction=req.config.hnsw_ef_construction,
         hnsw_ef_search=req.config.hnsw_ef_search,
         hnsw_candidate_cap=req.config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     write_lock = await get_db_write_lock(req.config.db_path)
@@ -450,7 +466,7 @@ async def count_collection(
         hnsw_ef_construction=config.hnsw_ef_construction,
         hnsw_ef_search=config.hnsw_ef_search,
         hnsw_candidate_cap=config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     try:
@@ -485,7 +501,7 @@ async def shred_key_blob(
         hnsw_ef_construction=req.config.hnsw_ef_construction,
         hnsw_ef_search=req.config.hnsw_ef_search,
         hnsw_candidate_cap=req.config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     write_lock = await get_db_write_lock(req.config.db_path)
@@ -509,45 +525,13 @@ async def shred_key_blob(
 @app.post("/api/collections/{name}/rotate")
 async def rotate_master_key(
     name: str,
-    req: RotateRequest,
     token: str = Depends(verify_token)
 ):
-    """Rotate the master key. Serialized via db write lock."""
-    coll = await get_cached_collection(
-        collection_name=name,
-        db_path=req.config.db_path,
-        embedding_dim=req.config.embedding_dim,
-        privacy=req.config.privacy,
-        auto_distill=req.config.auto_distill,
-        lattice_index=req.config.lattice_index,
-        max_entries=req.config.max_entries,
-        drosophila_hash=req.config.drosophila_hash,
-        engine=req.config.engine,
-        experimental_index=req.config.experimental_index,
-        hnsw_m=req.config.hnsw_m,
-        hnsw_ef_construction=req.config.hnsw_ef_construction,
-        hnsw_ef_search=req.config.hnsw_ef_search,
-        hnsw_candidate_cap=req.config.hnsw_candidate_cap,
-        master_key=token
+    """A per-collection REST rotation would conflict with the server's single master key."""
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Stop the server and rotate keys with the DB CLI before updating LATTICEDB_MASTER_KEY.",
     )
-    
-    write_lock = await get_db_write_lock(req.config.db_path)
-    async with write_lock:
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, coll.rotate_master_key, req.new_master_key)
-            # Update cache to reflect new master key if needed, or simply invalidate
-            resolved_db_path = resolve_server_db_path(req.config.db_path)
-            async with _cache_lock:
-                for k in list(_collections_cache.keys()):
-                    if k[0] == resolved_db_path and k[1] == name:
-                        del _collections_cache[k]
-            return {"status": "success", "message": "Master key rotated successfully."}
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
-            )
 
 @app.get("/api/collections/{name}/export")
 async def export_data(
@@ -571,7 +555,7 @@ async def export_data(
         hnsw_ef_construction=config.hnsw_ef_construction,
         hnsw_ef_search=config.hnsw_ef_search,
         hnsw_candidate_cap=config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     try:
@@ -606,7 +590,7 @@ async def import_data(
         hnsw_ef_construction=req.config.hnsw_ef_construction,
         hnsw_ef_search=req.config.hnsw_ef_search,
         hnsw_candidate_cap=req.config.hnsw_candidate_cap,
-        master_key=token
+        master_key=get_master_key()
     )
     
     write_lock = await get_db_write_lock(req.config.db_path)
@@ -626,19 +610,14 @@ async def import_data(
                 detail=str(e)
             )
 
-if __name__ == "__main__":
+def main():
     host = os.environ.get("LATTICEDB_HOST", "127.0.0.1")
     port = int(os.environ.get("LATTICEDB_PORT", "8000"))
     ssl_keyfile = os.environ.get("LATTICEDB_SSL_KEYFILE")
     ssl_certfile = os.environ.get("LATTICEDB_SSL_CERTFILE")
 
-    if host not in ("127.0.0.1", "localhost", "::1") and not ssl_certfile:
-        print("\n" + "=" * 72)
-        print("⚠️  WARNING: Binding to non-localhost address WITHOUT TLS!")
-        print(f"   Host: {host}:{port}")
-        print("   The bearer token will be transmitted in PLAINTEXT over the network.")
-        print("   Set LATTICEDB_SSL_KEYFILE and LATTICEDB_SSL_CERTFILE for production.")
-        print("=" * 72 + "\n")
+    if not is_loopback_host(host) and not (ssl_keyfile and ssl_certfile):
+        raise SystemExit("Nonlocal DB REST binding requires LATTICEDB_SSL_KEYFILE and LATTICEDB_SSL_CERTFILE.")
 
     uvicorn.run(
         "latticeshadow_db.server:app",
@@ -646,4 +625,9 @@ if __name__ == "__main__":
         port=port,
         ssl_keyfile=ssl_keyfile,
         ssl_certfile=ssl_certfile,
+        limit_concurrency=32,
     )
+
+
+if __name__ == "__main__":
+    main()

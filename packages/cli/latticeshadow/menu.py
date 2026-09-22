@@ -392,12 +392,9 @@ class ShadowMenuApp(AppKit.NSObject):
 
     @objc.python_method
     def notify(self, title: str, msg: str):
-        safe_msg = msg.replace('"', '\\"')
-        safe_title = title.replace('"', '\\"')
-        subprocess.Popen(
-            ["osascript", "-e", f'display notification "{safe_msg}" with title "{safe_title}"'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        from latticeshadow.notifications import notify_drift
+
+        notify_drift(title, msg)
 
     def toggleSpotlight(self):
         if hasattr(self, 'spotlight_window'):
