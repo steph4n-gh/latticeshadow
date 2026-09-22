@@ -22,8 +22,9 @@ jobs:
           git fetch origin main
           git merge-base --is-ancestor HEAD origin/main
           gh api "repos/$GITHUB_REPOSITORY/commits/$(git rev-parse HEAD)/check-runs?per_page=100" |
-            jq -e '[.check_runs[] | select(.conclusion == "success") | .name] |
-              (index("database") != null and index("macos") != null)'
+            jq -e '.check_runs |
+              (any(.name == "database" and .conclusion == "success") and
+               any(.name == "macos" and (.conclusion == "success" or .conclusion == "skipped")))'
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

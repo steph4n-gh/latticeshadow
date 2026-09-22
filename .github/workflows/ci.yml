@@ -15,8 +15,37 @@ concurrency:
 jobs:
   database:
     runs-on: ubuntu-latest
+    outputs:
+      run_macos: ${{ steps.changes.outputs.run_macos }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check whether macOS tests are needed
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            base="$PR_BASE"
+          else
+            base="$PUSH_BEFORE"
+          fi
+          if [[ ! "$base" =~ ^[0-9a-f]{40}$ ]] || [[ "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}"; then
+            echo "run_macos=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          run_macos=false
+          git diff --name-only -z "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/changed-files"
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              *.md) ;;
+              *) run_macos=true; break ;;
+            esac
+          done < "$RUNNER_TEMP/changed-files"
+          echo "run_macos=$run_macos" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -27,8 +56,11 @@ jobs:
       - run: make setup-db
       - run: make test-db
       - run: .venv/bin/python packages/db/scripts/verify_docs.py
+      - run: .venv/bin/python packages/cli/scripts/verify_docs.py --root .
 
   macos:
+    needs: database
+    if: needs.database.outputs.run_macos == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -43,5 +75,4 @@ jobs:
       - run: make setup
       - run: make test-cli
       - run: make test-model
-      - run: .venv/bin/python packages/cli/scripts/verify_docs.py --root .
       - run: env -u SDKROOT xcrun swift build --package-path packages/cli/native -c release
