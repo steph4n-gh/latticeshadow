@@ -125,10 +125,11 @@ make test-model   # downloads and evaluates the pinned model
 make docs
 ```
 
-CI runs DB tests and DB docs on Linux, plus CLI tests, the model check, docs,
-and native build on macOS. Hardware tests that may create temporary Keychain
-keys are separate: `make test-hardware`. Tags on tested `main` commits publish
-source-only GitHub releases without rerunning the macOS suite.
+CI runs DB tests and documentation checks on Linux. Changes beyond Markdown
+also run CLI tests, the model check, and the native build on macOS. Hardware
+tests that may create temporary Keychain keys are separate: `make test-hardware`.
+Tags on tested `main` commits publish source-only GitHub releases without
+rerunning the macOS suite.
 
 The code is available under the [MIT License](LICENSE). Contributions are
 welcome; please report security issues through [private vulnerability reporting](SECURITY.md).
