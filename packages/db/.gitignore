@@ -1,0 +1,22 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+.rollback_snapshots/
+
+# Local runtime artifacts
+*.db
+*.sqlite
+*_vectors.bin
+*_vectors.bin.lock
+benchmark_results/
+foundry_memory/
+*.benchmark.json
+
+# Platform-specific native builds
+*.so
+*.dylib

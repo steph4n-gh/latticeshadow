@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            packages/db/pyproject.toml
+      - run: make setup-db
+      - run: make test-db
+      - run: .venv/bin/python packages/db/scripts/verify_docs.py
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            packages/db/pyproject.toml
+            packages/cli/pyproject.toml
+      - run: make setup
+      - run: make test-cli
+      - run: make test-model
+      - run: .venv/bin/python packages/cli/scripts/verify_docs.py --root .
+      - run: env -u SDKROOT xcrun swift build --package-path packages/cli/native -c release

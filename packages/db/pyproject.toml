@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latticeshadow-db"
+version = "0.2.0"
+description = "Core Vector DB and Privacy Engine for LatticeShadow"
+authors = [
+    { name = "LatticeShadow Team" }
+]
+dependencies = [
+    "numpy",
+    "sqlalchemy",
+    "cryptography",
+    "pydantic",
+    "torch"
+]
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+server = [
+    "fastapi",
+    "uvicorn",
+    "requests"
+]
+maxperf = [
+    "faiss-cpu>=1.8.0; python_version < '3.14'",
+    "hnswlib>=0.8.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["latticeshadow_db*"]

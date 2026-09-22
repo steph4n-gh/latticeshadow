@@ -1,0 +1,273 @@
+{
+  "config": {
+    "chunk_size": 8192,
+    "count": 100000,
+    "dim": 384,
+    "diskann_candidates": null,
+    "diskann_full_scan_threshold": null,
+    "diskann_graph_degree": null,
+    "diskann_kmeans_iterations": 1,
+    "diskann_partitions": null,
+    "diskann_probes": null,
+    "hnsw_candidates": 3000,
+    "hnsw_ef_construction": 200,
+    "hnsw_ef_search": 1536,
+    "hnsw_m": 32,
+    "insert_chunk_size": 4096,
+    "k": 10,
+    "latency_gate_ms": 50.0,
+    "modes": [
+      "dense_exact_public",
+      "streaming_exact_public",
+      "hnsw_exact_rerank"
+    ],
+    "queries": 10,
+    "recall_gate": 0.95,
+    "seed": 42,
+    "speedup_gate": 1000.0,
+    "storage_gate_bytes": 26843545600,
+    "warmup_queries": 0
+  },
+  "environment": {
+    "optional_accelerators": {
+      "faiss": false,
+      "hnswlib": true,
+      "hnswlib_importable": true
+    },
+    "pid": 9015,
+    "platform": "macOS-26.6-arm64-arm-64bit-Mach-O",
+    "python": "3.14.4",
+    "torch": "2.12.0",
+    "torch_num_threads": 1
+  },
+  "gates": {
+    "achieved": false,
+    "best_mode": "streaming_exact_public",
+    "latency_gate_ms": 50.0,
+    "recall_gate": 0.95,
+    "speedup_gate": 1000.0,
+    "storage_gate_bytes": 26843545600,
+    "target_count": 100000,
+    "target_dim": 384,
+    "target_queries": 10,
+    "warmup_queries": 0
+  },
+  "modes": [
+    {
+      "accelerator_missing": false,
+      "build_ms": 7464.354833,
+      "cold_reload_ms": 96.259917,
+      "diskann_sidecar": null,
+      "experimental_index": null,
+      "fallback_reason": null,
+      "hnswlib_sidecar": null,
+      "latencies_ms": [
+        2793.845416,
+        2719.990875,
+        2649.998917,
+        2689.795417,
+        2647.224916,
+        2655.274667,
+        2636.720875,
+        2648.801958,
+        2649.722292,
+        2754.321875
+      ],
+      "max_ms": 2793.845416,
+      "mode": "dense_exact_public",
+      "mrr_at_k": 1.0,
+      "ndcg_at_k": 1.0,
+      "p50_ms": 2652.6367920000002,
+      "p50_speedup_vs_dense_public": 1.0,
+      "p95_ms": 2776.05982255,
+      "p95_speedup_vs_dense_public": 1.0,
+      "p99_ms": 2790.28829731,
+      "recall_at_k": 1.0,
+      "served_by_faiss": false,
+      "served_by_hnswlib": false,
+      "sidecar_audit": {
+        "plaintext_sidecar_bytes": 157286400,
+        "privacy_enabled": false,
+        "privacy_warning": false,
+        "sidecars": [
+          {
+            "bytes": 122073088,
+            "label": "sqlite",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_dense_exact_public.sqlite",
+            "plaintext": false
+          },
+          {
+            "bytes": 157286400,
+            "label": "vector_memmap",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_dense_exact_public.sqlite_scale_dense_exact_public_vectors.bin",
+            "plaintext": true
+          }
+        ],
+        "total_bytes": 279359488
+      },
+      "storage_bytes": 279359488,
+      "warmup_queries": 0
+    },
+    {
+      "accelerator_missing": false,
+      "build_ms": 7711.17075,
+      "cold_reload_ms": 141.680958,
+      "diskann_sidecar": null,
+      "experimental_index": "streaming_exact",
+      "fallback_reason": null,
+      "hnswlib_sidecar": null,
+      "latencies_ms": [
+        10.939667,
+        4.088375,
+        3.9515,
+        3.733083,
+        3.373167,
+        3.622167,
+        3.698334,
+        3.242791,
+        3.457375,
+        3.319834
+      ],
+      "max_ms": 10.939667,
+      "mode": "streaming_exact_public",
+      "mrr_at_k": 1.0,
+      "ndcg_at_k": 1.0,
+      "p50_ms": 3.6602505,
+      "p50_speedup_vs_dense_public": 724.7145494550168,
+      "p95_ms": 7.856585599999993,
+      "p95_speedup_vs_dense_public": 353.341764971033,
+      "p99_ms": 10.323050720000001,
+      "recall_at_k": 1.0,
+      "served_by_faiss": false,
+      "served_by_hnswlib": false,
+      "sidecar_audit": {
+        "plaintext_sidecar_bytes": 157686516,
+        "privacy_enabled": false,
+        "privacy_warning": false,
+        "sidecars": [
+          {
+            "bytes": 154603520,
+            "label": "sqlite",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_streaming_exact_public.sqlite",
+            "plaintext": false
+          },
+          {
+            "bytes": 157286400,
+            "label": "vector_memmap",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_streaming_exact_public.sqlite_scale_streaming_exact_public_vectors.bin",
+            "plaintext": true
+          },
+          {
+            "bytes": 400000,
+            "label": "streaming_norms_f32",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_streaming_exact_public.sqlite_scale_streaming_exact_public_streaming_norms.bin",
+            "plaintext": true
+          },
+          {
+            "bytes": 116,
+            "label": "streaming_norms_metadata",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_streaming_exact_public.sqlite_scale_streaming_exact_public_streaming_norms_meta.json",
+            "plaintext": true
+          }
+        ],
+        "total_bytes": 312290036
+      },
+      "storage_bytes": 312290036,
+      "warmup_queries": 0
+    },
+    {
+      "accelerator_missing": false,
+      "build_ms": 78872.743667,
+      "cold_reload_ms": 233.539584,
+      "diskann_sidecar": null,
+      "experimental_index": "hnsw_exact_rerank",
+      "fallback_reason": null,
+      "hnswlib_sidecar": {
+        "available": true,
+        "candidate_cap": 3000,
+        "collection": "scale_hnsw_exact_rerank",
+        "config_hash": "120b42ae51550a69",
+        "count": 100000,
+        "dim": 384,
+        "ef_construction": 200,
+        "ef_search": 1536,
+        "index_path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_hnsw_exact_rerank.sqlite_scale_hnsw_exact_rerank_hnswlib.bin",
+        "m": 32,
+        "max_elements": 100000,
+        "metadata_path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_hnsw_exact_rerank.sqlite_scale_hnsw_exact_rerank_hnswlib_meta.json",
+        "space": "cosine",
+        "vector_mtime_ns": 1782959380410681555,
+        "vector_size": 157286400,
+        "version": 1
+      },
+      "latencies_ms": [
+        46.069875,
+        24.849708,
+        25.147625,
+        24.957583,
+        25.185875,
+        24.803125,
+        24.8945,
+        25.136333,
+        25.416834,
+        24.771625
+      ],
+      "max_ms": 46.069875,
+      "mode": "hnsw_exact_rerank",
+      "mrr_at_k": 1.0,
+      "ndcg_at_k": 1.0,
+      "p50_ms": 25.046958,
+      "p50_speedup_vs_dense_public": 105.90654529783617,
+      "p95_ms": 36.77600654999998,
+      "p95_speedup_vs_dense_public": 75.48562454098219,
+      "p99_ms": 44.211101310000004,
+      "recall_at_k": 1.0,
+      "served_by_faiss": false,
+      "served_by_hnswlib": true,
+      "sidecar_audit": {
+        "plaintext_sidecar_bytes": 338519259,
+        "privacy_enabled": false,
+        "privacy_warning": false,
+        "sidecars": [
+          {
+            "bytes": 121655296,
+            "label": "sqlite",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_hnsw_exact_rerank.sqlite",
+            "plaintext": false
+          },
+          {
+            "bytes": 157286400,
+            "label": "vector_memmap",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_hnsw_exact_rerank.sqlite_scale_hnsw_exact_rerank_vectors.bin",
+            "plaintext": true
+          },
+          {
+            "bytes": 181232528,
+            "label": "hnswlib_index",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_hnsw_exact_rerank.sqlite_scale_hnsw_exact_rerank_hnswlib.bin",
+            "plaintext": true
+          },
+          {
+            "bytes": 331,
+            "label": "hnswlib_metadata",
+            "path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/scale_hnsw_exact_rerank.sqlite_scale_hnsw_exact_rerank_hnswlib_meta.json",
+            "plaintext": true
+          }
+        ],
+        "total_bytes": 460174555
+      },
+      "storage_bytes": 460174555,
+      "warmup_queries": 0
+    }
+  ],
+  "schema_version": 1,
+  "synthetic": {
+    "count": 100000,
+    "dim": 384,
+    "queries": 10,
+    "queries_path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/queries_f32.bin",
+    "schema_version": 1,
+    "seed": 42,
+    "vectors_path": "benchmark_results/native_hnsw_100k_384_m32ef1536_c3000/scale/synthetic_vectors_f32.bin"
+  }
+}

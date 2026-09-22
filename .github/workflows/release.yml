@@ -1,0 +1,30 @@
+name: Release source
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  checks: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Verify release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+          gh api "repos/$GITHUB_REPOSITORY/commits/$(git rev-parse HEAD)/check-runs?per_page=100" |
+            jq -e '[.check_runs[] | select(.conclusion == "success") | .name] |
+              (index("database") != null and index("macos") != null)'
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latticeshadow-cli"
+version = "0.1.0"
+description = "macOS AppKit Daemon & CLI Tool for LatticeShadow"
+authors = [
+    { name = "LatticeShadow Team" }
+]
+dependencies = [
+    "latticeshadow-db",
+    "cryptography",
+    "numpy",
+    "torch",
+    "sentence-transformers>=6,<7",
+    "pyobjc-framework-Cocoa",
+    "pyobjc-framework-Quartz; sys_platform == 'darwin'",
+    "pyobjc-framework-Vision; sys_platform == 'darwin'",
+    "pyobjc-framework-Metal; sys_platform == 'darwin'",
+    "pyobjc-framework-MetalKit; sys_platform == 'darwin'",
+    "py2app",
+    "psutil",
+    "rumps"
+]
+requires-python = ">=3.10"
+
+[project.scripts]
+shadow = "latticeshadow.shadow_cli:main"
+latticeshadow = "latticeshadow.shadow_cli:main"
+shadowd = "latticeshadow.shadowd:run_daemon"
+
+[tool.setuptools.package-data]
+latticeshadow = ["*.metal", "*.dylib", "*.zsh", "*.cpp"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["latticeshadow*"]
