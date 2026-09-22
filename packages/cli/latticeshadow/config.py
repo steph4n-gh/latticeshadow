@@ -106,14 +106,29 @@ def load_config() -> dict:
 
 
 def get_data_dir() -> str:
-    """
-    Get the directory for storing the database and holographic index.
-    If iCloud sync is enabled, returns the iCloud Drive LatticeShadow folder.
-    """
-    if get("sync.icloud_sync"):
-        icloud_dir = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/LatticeShadow")
-        os.makedirs(icloud_dir, mode=0o700, exist_ok=True)
-        return icloud_dir
+    """Keep live vault data local, including when encrypted iCloud sync is enabled."""
+    icloud_dir = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/LatticeShadow")
+    if get("sync.icloud_sync") and os.path.isdir(icloud_dir):
+        legacy_names = {
+            ".key", "shadow.sqlite", "shadow.sqlite-wal", "shadow.sqlite-shm",
+            "shadowd.log", "launchd.out", "launchd.err", ".ambient_context",
+            ".speculative_fix", "repair_queue.jsonl", ".audit_key.pem",
+            ".audit_log.jsonl", ".device_identity.pem", "trusted_devices.json",
+            ".pot_chain.jsonl", ".pot_key.pem", "snapshots",
+        }
+        with os.scandir(icloud_dir) as entries:
+            if any(
+                entry.name in legacy_names
+                or entry.name.startswith(("shadow.sqlite_", "holographic_", "shadowd.log."))
+                for entry in entries
+            ):
+                raise RuntimeError(
+                    "Legacy live LatticeShadow data is in the iCloud LatticeShadow folder. "
+                    "Stop the daemon, back up both folders, and copy the live vault and "
+                    "auxiliary files to ~/.latticeshadow without overwriting local data. "
+                    "Temporarily disable sync.icloud_sync to verify local recall before "
+                    "removing old iCloud copies; then re-enable encrypted packet sync."
+                )
     return LOG_DIR
 
 

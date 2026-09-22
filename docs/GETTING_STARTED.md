@@ -153,8 +153,14 @@ client configuration that we have not verified end to end.
 | Old data reports an embedding-model mismatch | Stop capture with `shadow disable`, then run `shadow rebuild-index --yes`. It re-embeds saved events and creates a private database backup. Stop other writers during the rebuild. |
 | Capture is running but no terminal event appears | Check `shadow consent status`, your `HISTFILE` / `~/.zsh_history`, and whether your shell has written the command to that file. The watcher does not replay old history on a normal start. |
 
-The local database, configuration, keys, and daemon log normally live under
-`~/.latticeshadow` (unless iCloud sync is explicitly enabled). Logs can contain
+The local database, configuration, keys, and daemon log live under
+`~/.latticeshadow`, including when encrypted iCloud packet sync is enabled.
+Older iCloud live vaults require the manual migration described in the
+[CLI guide](../packages/cli/README.md): stop capture, back up both folders,
+copy old live files and sidecars into `~/.latticeshadow` without overwriting
+local files, temporarily disable iCloud sync to verify local recall, then remove
+old iCloud copies and re-enable sync. Leave `sync_packets` in iCloud so encrypted
+packet sync continues. Logs can contain
 local paths and other operational details. Read them locally; check their
 contents before sharing them in a public issue.
 

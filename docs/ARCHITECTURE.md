@@ -28,7 +28,7 @@ flowchart LR
 3. The DB package stores document records, metadata, vector blobs, and collection metadata in SQLite. It also maintains local vector files for search; selected experimental index modes create additional sidecars. Treat the database *and* its neighboring files as sensitive data. A copied `.sqlite` file alone is not a general backup plan.
 4. `shadow install` prepares a macOS launch agent. `shadow enable` starts it; `shadow disable` stops it. Once running, the daemon polls the clipboard and newly appended Zsh history and writes events through the same vault. Optional ambient app context is a separate setting. Background capture is convenient, but a clipboard is a remarkably efficient way to collect things you did not mean to archive.
 
-The client normally writes under `~/.latticeshadow/` (`shadow.sqlite`, configuration, key material, and auxiliary files). The launch agent lives under `~/Library/LaunchAgents/`. The paths can differ when iCloud sync is enabled or tests substitute temporary storage.
+The client writes live data under `~/.latticeshadow/` (`shadow.sqlite`, configuration, key material, snapshots, logs, and auxiliary files), including when iCloud sync is enabled. Encrypted sync packets use the iCloud LatticeShadow folder separately. The launch agent lives under `~/Library/LaunchAgents/`; tests can substitute temporary storage. Earlier versions placed live files in iCloud. The client stops when it detects such files with iCloud sync enabled. The [migration steps](../packages/cli/README.md) temporarily disable sync while verifying the copied local vault, then remove old live iCloud copies before re-enabling encrypted packet sync.
 
 ## Storage and privacy boundaries
 
@@ -51,7 +51,7 @@ flowchart TB
 
 `shadow mcp serve` is a local **stdio** JSON-RPC process, not a network listener. An MCP client must be configured to launch it. The exposed tools can recall and summarize memory, report privacy state, create repair proposals, and delete named events with explicit confirmation. Responses apply pattern-based redaction to event text and string metadata. Redaction can miss secrets, and the assistant client may have its own remote boundary; decide what to connect before handing it access to your memory.
 
-The core save/search path does not require a hosted inference API. The model download needs network access once. Mesh sync and the mobile API are off by default; enabling them starts listeners. iCloud sync and remote LLM providers are optional and can move data outside this machine. Some LLM-assisted commands also probe a local LM Studio endpoint when no provider is configured. Review [configuration and capture guidance](../packages/cli/README.md) before enabling those paths.
+The core save/search path does not require a hosted inference API. The model download needs network access once. Mesh sync and the mobile API are off by default; enabling them starts listeners. The mobile API binds only to IPv4 loopback. iCloud sync exchanges encrypted packets, while remote LLM providers can receive selected text. Some LLM-assisted commands also probe a local LM Studio endpoint when no provider is configured. Review [configuration and capture guidance](../packages/cli/README.md) before enabling those paths.
 
 ## Where to look in the code
 

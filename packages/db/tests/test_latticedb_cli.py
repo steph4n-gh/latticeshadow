@@ -7,6 +7,7 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock
 from latticeshadow_db.cli import main
+from latticeshadow_db.cli import _secret
 
 
 def test_cli_db_add_single(tmp_path):
@@ -61,18 +62,18 @@ def test_cli_db_add_file(tmp_path):
     assert db.count() == 3
 
 
-def test_cli_db_rotate_and_shred(tmp_path):
+def test_cli_db_rotate_and_shred(tmp_path, monkeypatch):
     """Test CLI commands for key rotation and crypto shredding."""
     db_file = str(tmp_path / "cli_secure.sqlite")
     
     # 1. Add document with privacy
+    monkeypatch.setenv("LATTICEDB_MASTER_KEY", "my-secret-password")
     with patch("sys.argv", [
         "zk-bridge", "db-add",
         "--db", db_file,
         "--collection", "secure_coll",
         "--doc", "Secret data",
         "--privacy",
-        "--master-key", "my-secret-password"
     ]):
         main()
 
@@ -81,9 +82,8 @@ def test_cli_db_rotate_and_shred(tmp_path):
         "zk-bridge", "db-rotate",
         "--db", db_file,
         "--collection", "secure_coll",
-        "--old-key", "my-secret-password",
-        "--new-key", "my-new-password"
     ]):
+        monkeypatch.setenv("LATTICEDB_NEW_MASTER_KEY", "my-new-password")
         main()
 
     # Verify we can connect with new key
@@ -92,11 +92,11 @@ def test_cli_db_rotate_and_shred(tmp_path):
     assert db.count() == 1
 
     # 3. Crypto shred
+    monkeypatch.setenv("LATTICEDB_MASTER_KEY", "my-new-password")
     with patch("sys.argv", [
         "zk-bridge", "db-shred",
         "--db", db_file,
         "--collection", "secure_coll",
-        "--master-key", "my-new-password"
     ]):
         main()
         
@@ -105,3 +105,25 @@ def test_cli_db_rotate_and_shred(tmp_path):
     # The collection instance will be uninitialized or fail unlock
     with pytest.raises(PermissionError):
         latticedb.connect(db_path=db_file, collection="secure_coll", privacy=True, master_key="my-new-password")
+
+
+def test_cli_requires_new_key_environment_without_terminal(monkeypatch):
+    monkeypatch.delenv("LATTICEDB_NEW_MASTER_KEY", raising=False)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    with pytest.raises(SystemExit, match="LATTICEDB_NEW_MASTER_KEY"):
+        _secret("LATTICEDB_NEW_MASTER_KEY", "New master key: ")
+
+
+def test_cli_rotation_can_use_existing_keyring_key(monkeypatch, tmp_path):
+    monkeypatch.delenv("LATTICEDB_MASTER_KEY", raising=False)
+    monkeypatch.setenv("LATTICEDB_NEW_MASTER_KEY", "replacement-key")
+    fake_db = MagicMock()
+    with patch("latticeshadow_db.latticedb.connect", return_value=fake_db) as connect_mock:
+        with patch("sys.argv", [
+            "zk-bridge", "db-rotate", "--db", str(tmp_path / "vault.sqlite"),
+            "--collection", "secure_coll",
+        ]):
+            main()
+
+    assert connect_mock.call_args.kwargs["master_key"] is None
+    fake_db.rotate_master_key.assert_called_once_with("replacement-key")

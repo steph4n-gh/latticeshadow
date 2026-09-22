@@ -3,10 +3,22 @@ import sys
 import numpy as np
 import torch
 import os
+import getpass
 
 from .adapter import CayleyPrivacyAdapter
 from .alignment import ProcrustesAligner
 from .bridge import ZkBridge
+
+def _secret(env_name: str, prompt: str) -> str:
+    value = os.environ.get(env_name)
+    if value:
+        return value
+    if not sys.stdin.isatty():
+        raise SystemExit(f"Set {env_name} when running without a terminal.")
+    value = getpass.getpass(prompt)
+    if not value:
+        raise SystemExit("An empty encryption key is not allowed.")
+    return value
 
 def load_data(path: str) -> np.ndarray:
     """Loads dataset from .npy or .csv files."""
@@ -182,7 +194,7 @@ def handle_db_add(args):
         db_path=args.db,
         collection=args.collection,
         privacy=args.privacy,
-        master_key=args.master_key,
+        master_key=os.environ.get("LATTICEDB_MASTER_KEY") if args.privacy else None,
     )
     
     docs = []
@@ -234,7 +246,7 @@ def handle_db_search(args):
         db_path=args.db,
         collection=args.collection,
         privacy=args.privacy,
-        master_key=args.master_key,
+        master_key=os.environ.get("LATTICEDB_MASTER_KEY") if args.privacy else None,
     )
     
     result = db.search(args.query, n_results=args.n_results)
@@ -253,7 +265,7 @@ def handle_db_shred(args):
         db_path=args.db,
         collection=args.collection,
         privacy=True,
-        master_key=args.master_key,
+        master_key=os.environ.get("LATTICEDB_MASTER_KEY"),
     )
     db.crypto_shred()
     print(f"Successfully crypto-shredded collection '{args.collection}'. All vectors are now irrecoverable.")
@@ -266,9 +278,9 @@ def handle_db_rotate(args):
         db_path=args.db,
         collection=args.collection,
         privacy=True,
-        master_key=args.old_key,
+        master_key=os.environ.get("LATTICEDB_MASTER_KEY"),
     )
-    db.rotate_master_key(args.new_key)
+    db.rotate_master_key(_secret("LATTICEDB_NEW_MASTER_KEY", "New master key: "))
     print("Master key rotated successfully.")
 
 
@@ -295,7 +307,6 @@ def main():
     parser_add.add_argument("--file", help="Path to text or JSON file containing documents")
     parser_add.add_argument("--metadata", help="JSON metadata dictionary for single doc")
     parser_add.add_argument("--privacy", action="store_true", help="Enable Cayley privacy rotation")
-    parser_add.add_argument("--master-key", help="Master key passphrase")
 
     # db-search command
     parser_search = subparsers.add_parser("db-search", help="Semantic search in LatticeDB")
@@ -304,20 +315,16 @@ def main():
     parser_search.add_argument("--query", required=True, help="Search query")
     parser_search.add_argument("-n", "--n-results", type=int, default=5, help="Number of results")
     parser_search.add_argument("--privacy", action="store_true", help="Enable Cayley privacy rotation")
-    parser_search.add_argument("--master-key", help="Master key passphrase")
 
     # db-shred command
     parser_shred = subparsers.add_parser("db-shred", help="Crypto-shred a LatticeDB collection")
     parser_shred.add_argument("--db", required=True, help="Path to SQLite DB")
     parser_shred.add_argument("--collection", required=True, help="Collection name")
-    parser_shred.add_argument("--master-key", help="Master key passphrase")
 
     # db-rotate command
     parser_rotate = subparsers.add_parser("db-rotate", help="Rotate LatticeDB master key")
     parser_rotate.add_argument("--db", required=True, help="Path to SQLite DB")
     parser_rotate.add_argument("--collection", required=True, help="Collection name")
-    parser_rotate.add_argument("--old-key", required=True, help="Current master key passphrase")
-    parser_rotate.add_argument("--new-key", required=True, help="New master key passphrase")
     
     args = parser.parse_args()
     

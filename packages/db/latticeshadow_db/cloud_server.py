@@ -18,6 +18,8 @@ except ImportError:
         "Please run 'pip install fastapi uvicorn' to install dependencies."
     )
 
+from latticeshadow_db.http_limits import NonlocalTlsGuard, RequestBodyLimit, is_loopback_host
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("zk_bridge_cloud_server")
 
@@ -34,6 +36,8 @@ app = FastAPI(
     description="Custom activation hosting proxy endpoint for Pathway 1 (Zero-Knowledge).",
     version="0.1.0"
 )
+app.add_middleware(RequestBodyLimit, max_bytes=8 * 1024 * 1024)
+app.add_middleware(NonlocalTlsGuard)
 
 # Configuration parameters (can be overridden by command line arguments)
 CONFIG = {
@@ -174,19 +178,22 @@ async def health_check():
 
 def main():
     parser = argparse.ArgumentParser(description="ZkBridge Custom Split-Layer Activation Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Binding host address")
+    parser.add_argument("--host", default="127.0.0.1", help="Binding host address")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
     parser.add_argument("--local-dim", type=int, default=CONFIG["local_dim"], help="Local model hidden state dimension")
     parser.add_argument("--cloud-dim", type=int, default=CONFIG["cloud_dim"], help="Cloud model hidden state dimension")
-    parser.add_argument("--api-key", default=CONFIG["api_key"], help="Bearer token for incoming requests (or ZK_CLOUD_API_KEY)")
     parser.add_argument("--device", default=CONFIG["device"], help="PyTorch calculation device (cpu, cuda, mps)")
     parser.add_argument("--model-id", default=None, help="Hugging Face model ID for split execution (optional)")
     parser.add_argument("--max-batch-rows", type=int, default=CONFIG["max_batch_rows"], help="Maximum rows accepted per alignment request")
     parser.add_argument("--max-total-floats", type=int, default=CONFIG["max_total_floats"], help="Maximum total floats accepted per alignment request")
     args = parser.parse_args()
 
-    if not args.api_key:
-        parser.error("--api-key or ZK_CLOUD_API_KEY is required; no default bearer token is provided.")
+    if not CONFIG["api_key"]:
+        parser.error("ZK_CLOUD_API_KEY is required; no default bearer token is provided.")
+    ssl_keyfile = os.getenv("ZK_CLOUD_SSL_KEYFILE")
+    ssl_certfile = os.getenv("ZK_CLOUD_SSL_CERTFILE")
+    if not is_loopback_host(args.host) and not (ssl_keyfile and ssl_certfile):
+        parser.error("Nonlocal binding requires ZK_CLOUD_SSL_KEYFILE and ZK_CLOUD_SSL_CERTFILE.")
     if args.local_dim <= 0 or args.cloud_dim <= 0:
         parser.error("--local-dim and --cloud-dim must be positive.")
     if args.max_batch_rows <= 0 or args.max_total_floats <= 0:
@@ -195,7 +202,6 @@ def main():
     # Update configs
     CONFIG["local_dim"] = args.local_dim
     CONFIG["cloud_dim"] = args.cloud_dim
-    CONFIG["api_key"] = args.api_key
     CONFIG["device"] = args.device
     CONFIG["model_id"] = args.model_id
     CONFIG["max_batch_rows"] = args.max_batch_rows
@@ -203,9 +209,17 @@ def main():
 
     try:
         import uvicorn
-        logger.info("Starting ZkBridge Cloud Server on http://%s:%d", args.host, args.port)
+        scheme = "https" if ssl_keyfile and ssl_certfile else "http"
+        logger.info("Starting ZkBridge Cloud Server on %s://%s:%d", scheme, args.host, args.port)
         logger.info("Configuration: local_dim=%d, cloud_dim=%d, device=%s", args.local_dim, args.cloud_dim, args.device)
-        uvicorn.run(app, host=args.host, port=args.port)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            ssl_keyfile=ssl_keyfile,
+            ssl_certfile=ssl_certfile,
+            limit_concurrency=32,
+        )
     except ImportError:
         logger.error("uvicorn is required to run the server. Run 'pip install uvicorn'")
 

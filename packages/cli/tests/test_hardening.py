@@ -1,5 +1,7 @@
 import json
 import os
+import http.client
+import socket
 import pytest
 import sqlite3
 import stat
@@ -139,6 +141,51 @@ def test_mobile_api_search_serializes_search_result():
         ]
     finally:
         server.stop()
+
+
+def test_mobile_api_rejects_nonlocal_bind():
+    from latticeshadow.mobile_api import MobileAPIServer
+
+    with pytest.raises(ValueError, match="loopback"):
+        MobileAPIServer(MagicMock(), host="0.0.0.0", port=0).start()
+
+
+def test_mobile_api_rejects_negative_content_length():
+    from latticeshadow.mobile_api import MobileAPIServer
+
+    server = MobileAPIServer(MagicMock(), port=0)
+    server.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=2)
+        connection.putrequest("POST", "/pair")
+        connection.putheader("Content-Length", "-1")
+        connection.endheaders()
+        assert connection.getresponse().status == 400
+        connection.close()
+    finally:
+        server.stop()
+
+
+def test_mobile_api_bounds_connections_and_socket_timeouts():
+    from latticeshadow.mobile_api import (
+        MAX_CONNECTIONS, SOCKET_TIMEOUT_SECONDS, MobileAPIHandler, ThreadingHTTPServer,
+    )
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MobileAPIHandler)
+    try:
+        with socket.create_connection(server.server_address, timeout=2):
+            accepted, _ = server.get_request()
+            assert accepted.gettimeout() == SOCKET_TIMEOUT_SECONDS
+            accepted.close()
+
+        for _ in range(MAX_CONNECTIONS):
+            assert server._connection_slots.acquire(blocking=False)
+        with patch.object(server, "shutdown_request") as reject:
+            request = MagicMock()
+            server.process_request(request, ("127.0.0.1", 12345))
+            reject.assert_called_once_with(request)
+    finally:
+        server.server_close()
 
 
 def test_ambient_monitor_uses_search_result_api(monkeypatch):

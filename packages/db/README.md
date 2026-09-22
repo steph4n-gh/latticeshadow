@@ -69,9 +69,10 @@ stored vectors can still infer similarity, clusters, and relative distances.
 Document IDs, collection names, timestamps, and metadata are stored in readable
 form, so do not put secrets in those fields. Experimental indexes may write
 additional sidecar representations. This is not opaque vector encryption or a
-zero-knowledge proof. Use an explicit
-`master_key` when you need predictable key recovery across environments, and
-protect database files and keys as sensitive data.
+zero-knowledge proof. Use an explicit `master_key` or `LATTICEDB_MASTER_KEY`
+for recovery across environments. Privacy mode fails to open if neither is
+available and an OS keyring cannot securely save a key. Protect database files
+and keys as sensitive data.
 
 The optional Leech lattice index, alignment and distillation modules, and
 retrieval strategies such as HNSW, FlyHash, PQ-lite, and DiskANN-inspired
@@ -79,6 +80,33 @@ sidecars are research paths. Their speed, recall, compression, and privacy
 properties depend on the workload and configuration; none is a general
 performance or security guarantee. Optional server endpoints add a network
 boundary and should be evaluated separately before deployment.
+
+## Server and CLI credentials
+
+The REST server requires two different environment variables:
+`LATTICEDB_API_TOKEN` authenticates requests, and `LATTICEDB_MASTER_KEY`
+unlocks privacy-enabled collections. The server rejects equal values. It binds
+to localhost by default; a nonlocal `LATTICEDB_HOST` requires both
+`LATTICEDB_SSL_KEYFILE` and `LATTICEDB_SSL_CERTFILE`. Requests larger than
+8 MiB are rejected before JSON parsing.
+Start it through its module entry point (`python -m latticeshadow_db.server`);
+launching `uvicorn latticeshadow_db.server:app` directly bypasses the startup
+TLS check and is unsafe for nonlocal binding. The request guard cannot protect
+a bearer token already sent over plaintext HTTP.
+The REST rotation route returns 501 because rotating one collection while the
+server uses a single master key would leave that collection inaccessible.
+Stop the server and use the DB CLI to rotate every affected collection before
+changing `LATTICEDB_MASTER_KEY` and restarting it.
+
+The alignment server also binds to localhost by default. Set
+`ZK_CLOUD_API_KEY` before starting it. Nonlocal binding requires
+`ZK_CLOUD_SSL_KEYFILE` and `ZK_CLOUD_SSL_CERTFILE`; its request limit is 8 MiB.
+Start it through `python -m latticeshadow_db.cloud_server` for the same startup
+TLS check.
+
+The DB CLI reads the current key from `LATTICEDB_MASTER_KEY` or the OS keyring.
+Rotation reads the replacement from `LATTICEDB_NEW_MASTER_KEY` or prompts on a
+terminal. Avoid putting keys in shell commands.
 
 ## Find your way around
 

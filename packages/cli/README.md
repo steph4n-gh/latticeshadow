@@ -28,7 +28,22 @@ Setup installs both packages in editable mode and builds the native LWE
 component. It does not start a listener, enable capture, or change shell startup
 files. The first save or search downloads the pinned local embedding model;
 subsequent embedding runs locally. Your saved data and keys live under
-`~/.latticeshadow` by default; keep backups private.
+`~/.latticeshadow`; keep backups private. Enabling iCloud sync exchanges encrypted
+packets through iCloud but keeps the live vault, keys, snapshots, logs, and
+indexes in this local directory.
+
+If an earlier version used iCloud sync, its live files may still be in
+`~/Library/Mobile Documents/com~apple~CloudDocs/LatticeShadow`. The client
+stops before opening a new local vault when it detects them. Run `shadow disable`
+and back up both that folder and `~/.latticeshadow` outside iCloud. Copy the
+old live files (including hidden files, SQLite sidecars, indexes, and snapshots)
+into `~/.latticeshadow`. Leave `sync_packets` in iCloud. If a destination file
+already exists, resolve the two copies before copying anything; do not overwrite
+either. Temporarily run `shadow config set sync.icloud_sync false`, then verify
+`shadow timeline` and `shadow search` against the local vault. Once verified,
+remove the old live-data copies and the obsolete `handshake.json` from iCloud,
+retain the separate backup, and run `shadow config set sync.icloud_sync true`
+to resume encrypted packet sync through `sync_packets`.
 
 To opt into background capture:
 
@@ -69,7 +84,11 @@ It does not automatically connect to an assistant. Summaries may use a
 configured model provider; check that configuration before sending private
 memory to one. Peer mesh synchronization, homomorphic queries, and proof
 handling are experimental; the P2P proofs are simulated and do not provide
-zk-SNARK security. Do not expose a peer listener to untrusted networks.
+zk-SNARK security. Mesh queries now require trusted device pairing and signed
+messages; existing unpaired peers no longer answer searches. Do not expose a
+peer listener to untrusted networks.
+The mobile HTTP API binds only to an IPv4 loopback address and serves local
+clients; it no longer writes a pairing code into iCloud.
 
 ## Where next?
 

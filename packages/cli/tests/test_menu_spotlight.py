@@ -121,9 +121,11 @@ def test_grid_metal_view_creation_and_safe_fallback():
 
 
 def test_execute_recall():
+    from latticeshadow.holographic_index import HolographicIndex  # noqa: F401
+
     delegate = ShadowMenuApp.alloc().init()
     def exists_side_effect(path):
-        if "holographic_today.bin" in path:
+        if "holographic_today.bin" in str(path):
             return True
         return False
 
@@ -150,3 +152,24 @@ def test_execute_recall():
         mock_copy_clip.assert_called_once_with("test result", 0.99)
 
 
+def test_menu_notification_keeps_recalled_text_out_of_applescript():
+    delegate = ShadowMenuApp.alloc().init()
+    message = 'Match: \\"; do shell script "unexpected"\nnext line'
+
+    with patch("latticeshadow.notifications.notify_drift") as notify:
+        delegate.notify("Recall", message)
+
+    notify.assert_called_once_with("Recall", message)
+
+
+def test_notification_fallback_encodes_quotes_backslashes_and_control_chars():
+    from latticeshadow.notifications import _applescript_literal, _send_via_osascript
+
+    message = 'a\\"b\nc\rd\x00\u2028'
+    expected_literal = '"a' + '\\' * 3 + '"b c d  "'
+    assert _applescript_literal(message) == expected_literal
+
+    with patch("latticeshadow.notifications.subprocess.run") as run:
+        _send_via_osascript("Recall", message)
+
+    assert run.call_args.args[0][2] == f'display notification {expected_literal} with title "Recall"'
