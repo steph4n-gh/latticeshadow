@@ -1083,42 +1083,44 @@ def do_bench(args):
 
 
 def do_mcp(args):
+    from latticeshadow.sharing import (
+        create_grant, list_grants, load_grant, preview_grant, revoke_grant,
+    )
+
+    selected_dir = getattr(args, "vault_dir", None)
+    data_dir = str(Path(selected_dir).expanduser().absolute()) if selected_dir else get_log_dir()
+    vault_factory = (lambda: _restored_vault(Path(data_dir))) if selected_dir else (lambda: get_vault())
+    if args.mcp_command == "grant":
+        action = args.grant_command
+        if action == "create":
+            projects = list(args.project or [])
+            if args.unassigned:
+                projects.append(None)
+            if not projects or not args.source:
+                raise SystemExit("Choose at least one --project or --unassigned and one --source.")
+            grant = create_grant(data_dir, projects=projects, sources=args.source,
+                                 since=args.since, until=args.until, limit=args.limit)
+            print(json.dumps(grant, indent=2, sort_keys=True))
+        elif action == "list":
+            print(json.dumps(list_grants(data_dir), indent=2, sort_keys=True))
+        elif action == "preview":
+            grant = load_grant(data_dir, args.grant_id)
+            if grant is None:
+                raise SystemExit("Grant not found or revoked.")
+            print(json.dumps(preview_grant(vault_factory(), grant), indent=2, sort_keys=True))
+        elif action == "revoke":
+            if not revoke_grant(data_dir, args.grant_id):
+                raise SystemExit("Grant not found or already revoked.")
+            print(f"Revoked grant {args.grant_id} for subsequent requests.")
+        return
     if args.mcp_command == "serve":
+        if load_grant(data_dir, args.grant) is None:
+            raise SystemExit("Grant not found or revoked. Create one with 'shadow mcp grant create'.")
         from latticeshadow.mcp_server import serve
-        from latticeshadow.timeline import forget_events
 
-        def forget_all_stores(ids):
-            main_result = forget_events(get_vault(), ids)
-            payload = {"deleted": main_result["canonical_deleted"],
-                       "cleanup_errors": list(main_result["cleanup_errors"]), "ids": ids}
-            if hot_collection_exists(get_db_path()):
-                try:
-                    hot_vault = open_hot_vault(
-                        db_path=get_db_path(),
-                        master_key=get_or_create_master_key(),
-                        device=config.get_device(),
-                        strategy=HOT_INDEX_STRATEGY,
-                    )
-                    hot_result = forget_events(hot_vault, ids)
-                    payload["hot_deleted"] = hot_result["canonical_deleted"]
-                    payload["cleanup_errors"].extend(hot_result["cleanup_errors"])
-                except Exception as exc:
-                    payload["hot_error"] = str(exc)
-            if main_result["canonical_deleted"]:
-                try:
-                    invalidate_holographic_indexes(get_log_dir())
-                except OSError as exc:
-                    payload["cache_error"] = str(exc)
-            return payload
-
-        serve(
-            lambda: get_vault(),
-            db_path=get_db_path(),
-            data_dir=get_log_dir(),
-            forgetter=forget_all_stores,
-        )
-    else:
-        print("Usage: shadow mcp serve")
+        serve(vault_factory,
+              db_path=str(Path(data_dir) / "shadow.sqlite") if selected_dir else get_db_path(),
+              data_dir=data_dir, grant_id=args.grant, grant_store=data_dir)
 
 
 def do_consent(args):
@@ -2411,8 +2413,28 @@ def main():
     moonshot_p.add_argument("--output", type=str, help="Write JSON report to a file")
 
     mcp_p = subparsers.add_parser("mcp", help="MCP memory server commands")
-    mcp_sub = mcp_p.add_subparsers(dest="mcp_command")
-    mcp_sub.add_parser("serve", help="Serve redacted memory over MCP stdio")
+    mcp_sub = mcp_p.add_subparsers(dest="mcp_command", required=True)
+    mcp_serve = mcp_sub.add_parser("serve", help="Serve one scoped, read-only grant over MCP stdio")
+    mcp_serve.add_argument("--grant", required=True, help="Existing local sharing grant ID")
+    mcp_serve.add_argument("--vault-dir", help="Explicit alternate vault directory with shadow.sqlite and .key")
+    mcp_grant = mcp_sub.add_parser("grant", help="Manage local assistant-sharing grants")
+    grant_sub = mcp_grant.add_subparsers(dest="grant_command", required=True)
+    grant_create = grant_sub.add_parser("create", help="Allow an explicit project/source slice")
+    grant_create.add_argument("--project", action="append", help="Allowed project; repeat to include several")
+    grant_create.add_argument("--unassigned", action="store_true", help="Include events without a project")
+    grant_create.add_argument("--source", action="append", help="Allowed source; repeat to include several")
+    grant_create.add_argument("--since", help="Inclusive timezone-aware start")
+    grant_create.add_argument("--until", help="Exclusive timezone-aware end")
+    grant_create.add_argument("--limit", type=int, default=20, help="Maximum results per request")
+    grant_create.add_argument("--vault-dir", help="Explicit alternate vault directory")
+    grant_list = grant_sub.add_parser("list", help="List grant policies without opening the vault")
+    grant_list.add_argument("--vault-dir", help="Explicit alternate vault directory")
+    grant_preview = grant_sub.add_parser("preview", help="Preview the eligible record count and examples")
+    grant_preview.add_argument("grant_id", help="Grant ID")
+    grant_preview.add_argument("--vault-dir", help="Explicit alternate vault directory")
+    grant_revoke = grant_sub.add_parser("revoke", help="Stop subsequent requests under a grant")
+    grant_revoke.add_argument("grant_id", help="Grant ID")
+    grant_revoke.add_argument("--vault-dir", help="Explicit alternate vault directory")
 
     subparsers.add_parser("sleep", help="Trigger REM sleep consolidation")
     subparsers.add_parser("shred", help="Crypto-shred clipboard history")
