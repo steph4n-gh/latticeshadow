@@ -400,6 +400,15 @@ def test_cli_install(setup_test_env, mock_subprocess_run, capsys):
     assert not (setup_test_env["log_dir"] / "latticeshadow.zsh").exists()
     assert not setup_test_env["zshrc_path"].exists()
 
+
+def test_app_install_launches_bundled_daemon(setup_test_env, mock_subprocess_run, monkeypatch):
+    cli = setup_test_env["shadow_cli"]
+    executable = "/Applications/LatticeShadow.app/Contents/MacOS/LatticeShadow"
+    monkeypatch.setattr(cli.sys, "executable", executable)
+    cli.do_install()
+    with open(setup_test_env["plist_path"], "rb") as stream:
+        assert plistlib.load(stream)["ProgramArguments"] == [executable, "--daemon"]
+
 def test_cli_install_idempotency(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
     

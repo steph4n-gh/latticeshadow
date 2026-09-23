@@ -436,6 +436,12 @@ def _get_python_path():
 def _get_daemon_path():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), 'shadowd.py'))
 
+
+def _daemon_argv():
+    if ".app/Contents/MacOS/" in sys.executable:
+        return [sys.executable, "--daemon"]
+    return [_get_python_path(), _get_daemon_path()]
+
 def _configure_shell(enable: bool) -> None:
     """Manage only LatticeShadow's marked shell lines."""
     zshrc = os.path.expanduser("~/.zshrc")
@@ -584,16 +590,13 @@ def do_install():
     os.makedirs(log_dir, mode=0o700, exist_ok=True)
     os.chmod(log_dir, 0o700)
 
-    python_path = _get_python_path()
-    daemon_path = _get_daemon_path()
-
     # Generate master key on first install
     get_or_create_master_key()
 
     # Write launchd plist
     plist = {
         "Label": PLIST_LABEL,
-        "ProgramArguments": [python_path, daemon_path],
+        "ProgramArguments": _daemon_argv(),
         "RunAtLoad": True,
         # A normal shutdown or an integrity refusal must stay stopped.
         "KeepAlive": {"SuccessfulExit": False},
@@ -653,22 +656,6 @@ def do_enable():
             _local_model()
         except Exception as exc:
             raise SystemExit(f"Cannot start capture until the local embedding model loads: {exc}") from exc
-    service = None
-    try:
-        import ServiceManagement
-        if ".app/Contents/MacOS" in sys.executable:
-            service = ServiceManagement.SMAppService.mainAppService()
-    except Exception:
-        pass
-
-    if service:
-        success, error = service.registerAndReturnError_(None)
-        if success:
-            print("✓ LatticeShadow registered as login item via SMAppService.")
-            return
-        else:
-            print(f"Warning: SMAppService registration failed: {error}. Falling back to launchd plist.")
-
     if not os.path.exists(PLIST_PATH):
         raise SystemExit("Error: plist not found. Run 'shadow install' first.")
     subprocess.run(["launchctl", "unload", PLIST_PATH],
@@ -685,22 +672,6 @@ def do_enable():
 
 
 def do_disable():
-    service = None
-    try:
-        import ServiceManagement
-        if ".app/Contents/MacOS" in sys.executable:
-            service = ServiceManagement.SMAppService.mainAppService()
-    except Exception:
-        pass
-
-    if service:
-        success, error = service.unregisterAndReturnError_(None)
-        if success:
-            print("✓ LatticeShadow unregistered from login items via SMAppService.")
-            return
-        else:
-            print(f"Warning: SMAppService unregistration failed: {error}.")
-
     if os.path.exists(PLIST_PATH):
         _set_launch_agent_enabled(False)
         result = subprocess.run(["launchctl", "unload", PLIST_PATH], capture_output=True, text=True)
@@ -2114,14 +2085,14 @@ def do_doctor():
             with open(PLIST_PATH, "rb") as f:
                 pl = plistlib.load(f)
             args = pl.get("ProgramArguments", [])
-            if args and args[0] != sys.executable:
-                checks.append((False, "Plist Python", f"Mismatch! Plist uses {args[0]}, current is {sys.executable}", "run 'shadow install' to rewrite plist"))
+            if args != _daemon_argv():
+                checks.append((False, "Plist daemon", "Launchd command differs from this installation", "run 'shadow install' to rewrite plist"))
             else:
-                checks.append((True, "Plist Python", "Matches current Python interpreter", None))
+                checks.append((True, "Plist daemon", "Matches this installation", None))
         except Exception as e:
-            checks.append((False, "Plist Python", f"Failed to parse plist: {e}", "run 'shadow install'"))
+            checks.append((False, "Plist daemon", f"Failed to parse plist: {e}", "run 'shadow install'"))
     else:
-        checks.append((True, "Plist Python", "Launchd Plist not present (skipped)", None))
+        checks.append((True, "Plist daemon", "Launchd Plist not present (skipped)", None))
 
     # 10. Daemon status
     res = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
