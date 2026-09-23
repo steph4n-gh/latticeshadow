@@ -1,0 +1,1091 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>LatticeShadow — The User Manual</title>
+  <link rel="stylesheet" href="user-manual.css">
+</head>
+<body>
+  <a class="skip-link" href="#manual">Skip to the manual</a>
+  <header class="cover" aria-label="LatticeShadow user manual cover">
+    <div class="cover-topline"><span>LATTICESHADOW</span><span>THE USER MANUAL · VERSION 0.2.0</span></div>
+    <div class="cover-main">
+      <svg class="mark" viewBox="0 0 112 112" role="img" aria-label="LatticeShadow lattice mark">
+        <g fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M56 8 91 28v42L56 91 21 70V28Z"/>
+          <path d="M56 8v83M21 28l70 42M91 28 21 70M21 28l35 21 35-21M21 70l35-21 35 21"/>
+        </g>
+        <g fill="currentColor"><circle cx="56" cy="8" r="4"/><circle cx="91" cy="28" r="4"/><circle cx="91" cy="70" r="4"/><circle cx="56" cy="91" r="4"/><circle cx="21" cy="70" r="4"/><circle cx="21" cy="28" r="4"/><circle cx="56" cy="49" r="4"/></g>
+      </svg>
+      <div><p class="eyebrow">A local memory for the work you were just doing</p>
+        <h1>LatticeShadow</h1><p class="cover-subtitle">The User Manual</p>
+        <p class="cover-description">Save a useful fragment. Find it later. Decide what the app is allowed to watch.</p>
+      </div>
+    </div>
+    <div class="cover-bottom"><span>DAILY-USE ALPHA · SOURCE INSTALLATION</span><span>Small things stay with you.</span></div>
+  </header>
+  <div class="manual-layout">
+    <aside class="contents" aria-label="Section navigation">
+      <div class="contents-heading">In this manual</div>
+      <ul>
+      <li><a href="#latticeshadow-user-manual"
+      id="toc-latticeshadow-user-manual">LatticeShadow user manual</a>
+      <ul>
+      <li><a href="#contents" id="toc-contents">Contents</a></li>
+      <li><a href="#1-what-you-are-installing"
+      id="toc-1-what-you-are-installing">1. What you are
+      installing</a></li>
+      <li><a href="#2-first-session-save-and-find-one-note"
+      id="toc-2-first-session-save-and-find-one-note">2. First session:
+      save and find one note</a></li>
+      <li><a href="#3-everyday-recall-and-projects"
+      id="toc-3-everyday-recall-and-projects">3. Everyday recall and
+      projects</a></li>
+      <li><a href="#4-background-capture-and-consent"
+      id="toc-4-background-capture-and-consent">4. Background capture
+      and consent</a></li>
+      <li><a href="#5-the-menu-bar-and-recall-panel"
+      id="toc-5-the-menu-bar-and-recall-panel">5. The menu bar and
+      Recall panel</a></li>
+      <li><a href="#6-back-up-and-restore"
+      id="toc-6-back-up-and-restore">6. Back up and restore</a></li>
+      <li><a href="#7-let-an-assistant-read-a-chosen-slice"
+      id="toc-7-let-an-assistant-read-a-chosen-slice">7. Let an
+      assistant read a chosen slice</a></li>
+      <li><a href="#8-settings-status-and-local-files"
+      id="toc-8-settings-status-and-local-files">8. Settings, status,
+      and local files</a></li>
+      <li><a href="#9-stop-remove-or-start-over"
+      id="toc-9-stop-remove-or-start-over">9. Stop, remove, or start
+      over</a></li>
+      <li><a href="#10-troubleshooting" id="toc-10-troubleshooting">10.
+      Troubleshooting</a></li>
+      <li><a href="#11-command-reference"
+      id="toc-11-command-reference">11. Command reference</a></li>
+      <li><a href="#12-glossary-and-limits"
+      id="toc-12-glossary-and-limits">12. Glossary and limits</a></li>
+      </ul></li>
+      </ul>
+      <p class="contents-foot">Read the first session before inviting the daemon to join you.</p>
+    </aside>
+    <main id="manual" class="manual-body">
+      <h1 id="latticeshadow-user-manual">LatticeShadow user manual</h1>
+      <p><em>A field guide to saving a thought, finding it again, and
+      deciding what the app may watch.</em></p>
+      <p><strong>Edition:</strong> version 0.2.0 daily-use alpha.</p>
+      <p><strong>Audience:</strong> people trying the macOS client from
+      source. <strong>Status:</strong> development prototype. The public
+      releases are source archives. An Apple Silicon app has been built
+      for internal validation, but there is no signed, notarized public
+      binary to install yet.</p>
+      <p>This manual follows the implemented commands. It explains the
+      ordinary path first and puts the more speculative machinery near
+      the back. A tool that remembers everything would be a problem; a
+      tool that remembers exactly what you asked it to remember is a
+      more reasonable starting point.</p>
+      <h2 id="contents">Contents</h2>
+      <ol type="1">
+      <li><a href="#1-what-you-are-installing">What you are
+      installing</a></li>
+      <li><a href="#2-first-session-save-and-find-one-note">First
+      session: save and find one note</a></li>
+      <li><a href="#3-everyday-recall-and-projects">Everyday recall and
+      projects</a></li>
+      <li><a href="#4-background-capture-and-consent">Background capture
+      and consent</a></li>
+      <li><a href="#5-the-menu-bar-and-recall-panel">The menu bar and
+      Recall panel</a></li>
+      <li><a href="#6-back-up-and-restore">Back up and restore</a></li>
+      <li><a href="#7-let-an-assistant-read-a-chosen-slice">Let an
+      assistant read a chosen slice</a></li>
+      <li><a href="#8-settings-status-and-local-files">Settings, status,
+      and local files</a></li>
+      <li><a href="#9-stop-remove-or-start-over">Stop, remove, or start
+      over</a></li>
+      <li><a href="#10-troubleshooting">Troubleshooting</a></li>
+      <li><a href="#11-command-reference">Command reference</a></li>
+      <li><a href="#12-glossary-and-limits">Glossary and limits</a></li>
+      </ol>
+      <h2 id="1-what-you-are-installing">1. What you are installing</h2>
+      <p>LatticeShadow has two packages. <code>latticeshadow-db</code>
+      is an independently installable SQLite-backed Python library.
+      <code>latticeshadow-cli</code> is the macOS client: manual memory
+      commands, an opt-in capture daemon, a menu bar interface, and a
+      local MCP server. This manual is about the <strong>macOS
+      client</strong>. The <a href="../packages/db/README.md">DB
+      guide</a> covers library use on other systems.</p>
+      <p>For the supported source setup, use a Mac with Python 3.12 or
+      newer, Xcode Command Line Tools, and network access for
+      dependencies and the first retrieval model download. From a
+      checkout:</p>
+      <div class="sourceCode" id="cb1"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone https://github.com/steph4n-gh/latticeshadow.git</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> latticeshadow</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> setup</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> <span class="at">--help</span></span></code></pre></div>
+      <p><code>make setup</code> installs both packages in an editable
+      virtual environment and builds the native component. It
+      <strong>does not</strong> start the daemon, enable capture, or
+      modify your shell startup file. The <code>shadow</code> command
+      above is available while that environment is active. Re-activate
+      it in a new shell, or use the absolute path to
+      <code>.venv/bin/shadow</code>.</p>
+      <blockquote>
+      <p><strong>First-run boundary:</strong> installation is quiet.
+      Your first manual save creates the vault; background capture still
+      waits for your explicit source choices.</p>
+      </blockquote>
+      <p>The first real save or search downloads the pinned Static
+      Retrieval MRL model from Hugging Face. Embeddings then run
+      locally. Ordinary remember/search has no cloud language-model
+      provider by default. If the model is unavailable, the client
+      reports an error instead of silently switching to hash
+      vectors.</p>
+      <p>The internal <code>.app</code> candidate is arm64 and ad-hoc
+      signed for testing. It has passed selected disposable-guest
+      checks, but upgrade approval, stock Gatekeeper, signing, and
+      notarization are still open release gates. This manual does not
+      offer it as a public installer. Build details and exact evidence
+      are in <a href="../packages/cli/packaging/README.md">App
+      packaging</a>.</p>
+      <h2 id="2-first-session-save-and-find-one-note">2. First session:
+      save and find one note</h2>
+      <p>Start with synthetic or harmless text. You can do all of this
+      with the daemon stopped:</p>
+      <div class="sourceCode" id="cb2"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> remember note <span class="st">&quot;Restart the widget queue after checking its log&quot;</span> <span class="at">--project</span> ops</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> timeline <span class="at">--project</span> ops</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> timeline <span class="at">--query</span> <span class="st">&quot;widget queue restart&quot;</span> <span class="at">--project</span> ops</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> status</span></code></pre></div>
+      <p><code>remember</code> prints a generated event ID such as
+      <code>note_...</code>; keep it if you want to edit or delete that
+      particular event. <code>timeline</code> without
+      <code>--query</code> lists recent events. With
+      <code>--query</code>, it ranks matches within the selected scope.
+      <code>shadow status</code> may say <code>Daemon: STOPPED</code>.
+      That is normal: manual saves are not background capture wearing a
+      disguise.</p>
+      <p>To remove the test note, replace <code>YOUR_ID</code> with the
+      printed ID:</p>
+      <div class="sourceCode" id="cb3"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> forget <span class="at">--id</span> YOUR_ID</span></code></pre></div>
+      <p>Review the selected ID and type <code>FORGET</code> when
+      prompted. <code>--yes</code> skips the prompt for scripts; it
+      deserves the usual respect for a delete switch. Forgetting removes
+      selected events from the live canonical store and attempts to
+      clean optional mirrored indexes. Read any cleanup warning before
+      assuming all live copies are gone. Backups, original source files,
+      synced copies, and text already sent to another application are
+      separate.</p>
+      <h2 id="3-everyday-recall-and-projects">3. Everyday recall and
+      projects</h2>
+      <h3 id="save-with-useful-provenance">Save with useful
+      provenance</h3>
+      <p><code>shadow remember TYPE TEXT</code> accepts these event
+      types: <code>clipboard</code>, <code>terminal</code>,
+      <code>note</code>, <code>ambient</code>, <code>file</code>,
+      <code>url</code>, <code>app</code>, <code>repair</code>,
+      <code>sync</code>, and <code>model_call</code>. For ordinary
+      manual use, <code>note</code>, <code>terminal</code>,
+      <code>file</code>, and <code>url</code> are usually enough. The
+      type describes the event; the <strong>source</strong> is a
+      separate label used in filters and sharing grants. Without
+      <code>--source</code>, source equals type.</p>
+      <div class="sourceCode" id="cb4"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> remember terminal <span class="st">&quot;Run the regression suite before the release&quot;</span> <span class="at">--project</span> ops</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> remember url <span class="st">&quot;Widget queue runbook&quot;</span> <span class="dt">\</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--metadata</span> <span class="st">&#39;{&quot;url&quot;:&quot;https://example.org/runbook&quot;}&#39;</span> <span class="at">--project</span> ops</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> remember note <span class="st">&quot;A decision with a real date&quot;</span> <span class="dt">\</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--timestamp</span> <span class="st">&#39;2026-09-22T14:00:00-04:00&#39;</span> <span class="at">--project</span> ops</span></code></pre></div>
+      <p><code>--timestamp</code> must include a timezone. If omitted,
+      the event's occurrence time is inferred from capture time.
+      <code>--metadata</code> takes a JSON object. Use <code>--id</code>
+      only when you have a deliberate stable identifier; avoid secrets
+      in IDs, project names, and source labels. They are metadata, not
+      encrypted document text.</p>
+      <h3 id="find-narrow-and-explain">Find, narrow, and explain</h3>
+      <div class="sourceCode" id="cb5"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> now</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> timeline <span class="at">--project</span> ops <span class="at">--source</span> terminal <span class="at">--limit</span> 20</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> timeline <span class="at">--unassigned</span> <span class="at">--since</span> <span class="st">&#39;2026-09-01T00:00:00Z&#39;</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> timeline <span class="at">--query</span> <span class="st">&quot;regression suite&quot;</span> <span class="at">--project</span> ops <span class="at">--json</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> why <span class="st">&quot;what did I do before release?&quot;</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> search <span class="st">&quot;regression suite&quot;</span></span></code></pre></div>
+      <p><code>now</code> shows recent local context without calling an
+      LLM. <code>timeline</code> is the main scoped view: filter by
+      <code>--project</code> or <code>--unassigned</code>,
+      <code>--source</code>, and a timezone-aware
+      <code>--since</code>/<code>--until</code> interval.
+      <code>--since</code> includes its boundary; <code>--until</code>
+      excludes it. Use <code>--json</code> for structured output. A
+      recent (non-query) page may print a cursor; repeat the same
+      filters with <code>--cursor CURSOR</code> for the next page.
+      Query-ranked pages do not accept cursors. <code>search</code> is a
+      shorter, unscoped search command. <code>why</code> shows matches
+      alongside recent context; it is an explanation aid, not proof that
+      a result answers your question.</p>
+      <p>Search scores are ranking signals, <strong>not</strong>
+      probabilities or answer confidence. An authored synthetic fixture
+      reached the project's top-five recall target, but that does not
+      promise every paraphrase will work on your notes. If a query
+      misses, inspect a recent timeline, narrow the scope, or try words
+      that appear in the saved text. The model is helpful; it is not
+      clairvoyant.</p>
+      <blockquote>
+      <p><strong>Remembering is selective:</strong> a project and source
+      are exact filters. If a result seems to vanish, check the scope
+      before assuming the vault forgot it.</p>
+      </blockquote>
+      <h3 id="assign-or-clear-a-project">Assign or clear a project</h3>
+      <p>Captured events start Unassigned unless you assign them. Manual
+      events may get a project at save time. Existing events can be
+      moved without changing their ID:</p>
+      <div class="sourceCode" id="cb6"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> assign-project <span class="at">--id</span> YOUR_ID <span class="at">--project</span> ops</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> assign-project <span class="at">--id</span> YOUR_ID <span class="at">--unassigned</span></span></code></pre></div>
+      <p>Repeat <code>--id</code> to update several events. A project is
+      an exact label and a useful sharing boundary, not a folder or an
+      automatic classifier. Check the result with
+      <code>shadow timeline --project ops</code> or
+      <code>--unassigned</code>.</p>
+      <h3 id="open-summarize-and-delete-carefully">Open, summarize, and
+      delete carefully</h3>
+      <p><code>shadow open-context "widget runbook" --dry-run</code>
+      prints a supported URL or absolute local file target from the best
+      matching event. Omit <code>--dry-run</code> to open the web URL or
+      reveal the local file. It does not execute a command from a
+      memory. <code>shadow summarize --query "widget"</code> summarizes
+      matched events; without a configured provider it returns an
+      extractive local summary. If you opt into a remote LLM provider,
+      summarization and other LLM commands may send processed context to
+      that provider. <code>--no-foundation</code> skips an optional
+      Foundation Models bridge, but does not disable a separately
+      configured LLM.</p>
+      <p>For a bounded selection before deletion:</p>
+      <div class="sourceCode" id="cb7"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> forget <span class="at">--query</span> <span class="st">&quot;widget queue&quot;</span> <span class="at">--project</span> ops <span class="at">--limit</span> 5</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> forget <span class="at">--source</span> terminal <span class="at">--since</span> <span class="st">&#39;2026-09-01T00:00:00Z&#39;</span> <span class="at">--limit</span> 10</span></code></pre></div>
+      <p>The command prints the IDs it selected and asks for
+      <code>FORGET</code>. Prefer <code>--id</code> when you know
+      exactly which record should go.</p>
+      <h2 id="4-background-capture-and-consent">4. Background capture
+      and consent</h2>
+      <p>Background capture is optional. The daemon can watch future
+      clipboard text and new entries written to Zsh history. Both
+      sources default <strong>off</strong>, and you must record an
+      explicit on/off choice for each before <code>shadow enable</code>
+      will start. Capture can include very personal text. A password
+      manager's concealment marker and LatticeShadow's filters are
+      useful, but neither recognizes every secret.</p>
+      <p>Prepare the launch agent, choose sources, then start it:</p>
+      <div class="sourceCode" id="cb8"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> install</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> consent wizard</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> consent status</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> enable</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> status</span></code></pre></div>
+      <p>The wizard covers clipboard and terminal history. You can
+      choose directly, including the valid choice to capture
+      nothing:</p>
+      <div class="sourceCode" id="cb9"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> consent set clipboard off</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> consent set terminal_history off</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> enable</span></code></pre></div>
+      <p><code>shadow install</code> prepares key material and a user
+      launch agent <strong>without</strong> starting capture, including
+      at the next login. Re-running it stops a running daemon.
+      <code>shadow enable</code> loads the retrieval model, checks the
+      recorded choices and code-integrity baseline, then starts the
+      agent. After a source-code upgrade, review the change and run
+      <code>shadow install</code> again before enabling. An old source
+      setting without a recorded choice must be confirmed again.</p>
+      <p>Capture is prospective. The terminal watcher starts at the
+      current end of the history file and depends on your shell writing
+      to <code>HISTFILE</code> (often <code>~/.zsh_history</code>). It
+      does not promise a complete record of earlier commands. Clipboard
+      capture reads copied text when enabled; it is not a universal
+      secret filter. Neither source needs to be enabled for manual
+      memory.</p>
+      <p>Pause keeps source choices and persists across a restart;
+      disable stops the service across logins:</p>
+      <div class="sourceCode" id="cb10"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> pause</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> status</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> resume</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> disable</span></code></pre></div>
+      <p>When paused or off, new terminal history should not be
+      backfilled into capture later. <code>shadow resume</code> requires
+      the necessary choices. If you change a source choice while the
+      daemon is running, check <code>shadow status</code>; for a
+      predictable restart, disable, change consent, and enable
+      again.</p>
+      <p>To skip a whole source or a case-insensitive literal before
+      capture, set JSON arrays:</p>
+      <div class="sourceCode" id="cb11"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> config set inputs.excluded_sources <span class="st">&#39;[&quot;terminal&quot;]&#39;</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> config set inputs.excluded_literals <span class="st">&#39;[&quot;example secret prefix&quot;]&#39;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> config set retention.days 30</span></code></pre></div>
+      <p>Each exclusion list allows at most 100 nonempty strings of at
+      most 256 UTF-8 bytes. These rules affect future capture, not
+      records already saved. Age retention checks at daemon startup and
+      about hourly, using occurrence time (or insertion time for older
+      events without one). <code>retention.days 0</code> turns it off.
+      Retention removes live records and optional hot-index copies, not
+      old backups, original clipboard/history material, or text already
+      shared elsewhere.</p>
+      <p>Optional ambient context, iCloud packet sync, mesh, mobile API,
+      and hot index are separate consent or configuration choices and
+      remain experimental. Review <a href="CAPABILITIES.md">Capabilities
+      and limits</a> before enabling them. Do not point a peer listener
+      at an untrusted network.</p>
+      <h2 id="5-the-menu-bar-and-recall-panel">5. The menu bar and
+      Recall panel</h2>
+      <p>On a logged-in Mac, <code>shadow gui</code> starts the AppKit
+      menu bar client. The menu has <strong>Open Recall…</strong>,
+      capture status, Pause/Resume, and a keyboard-shortcut choice. The
+      shortcut defaults to Option–Space; Control–Option–Space,
+      Command–Option–Space, and Off are available. If macOS does not
+      permit the shortcut, use the menu item. The alpha's full logged-in
+      UI and shortcut permission behavior are still under
+      validation.</p>
+      <p>With the Recall panel open:</p>
+      <ol type="1">
+      <li>Leave search empty for recent events, or type a query for
+      ranked matches.</li>
+      <li>Narrow by exact project, <strong>Unassigned only</strong>,
+      source, and Any time/Today/Last 7 days/Last 30 days.</li>
+      <li>Select a row to read its preview, source, project,
+      occurrence/capture times, and local event reference.</li>
+      <li><strong>Copy</strong> puts the full current event text on the
+      clipboard; Return also copies. <strong>Open link/file</strong>
+      supports web URLs and existing local files only.</li>
+      <li><strong>Assign project</strong> edits the selected event's
+      label. <strong>Forget…</strong> asks for confirmation and removes
+      it from live views. Escape closes the panel.</li>
+      </ol>
+      <p>The preview can shorten very long text; Copy uses the complete
+      event. Before copy/open/assign/forget, the panel rereads the
+      selected event in the current scope. If another operation removed
+      or moved it, the panel asks you to refresh instead of acting on a
+      stale row. Pause/Resume here changes the same persistent capture
+      state as the CLI. The GUI is a view of your local vault, not a
+      separate copy of it.</p>
+      <p>The exact current labels are collected in the <a
+      href="#gui-action-reference">GUI action reference</a>.</p>
+      <h2 id="6-back-up-and-restore">6. Back up and restore</h2>
+      <p>A portable backup is a passphrase-encrypted snapshot of the
+      <strong>canonical</strong> vault:</p>
+      <div class="sourceCode" id="cb12"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> backup export ~/Desktop/latticeshadow.lsb</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> backup restore ~/Desktop/latticeshadow.lsb <span class="dt">\</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--destination</span> ~/Desktop/latticeshadow-restored</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> backup inspect <span class="at">--destination</span> ~/Desktop/latticeshadow-restored</span></code></pre></div>
+      <p>The passphrase is prompted rather than placed in shell history.
+      For a controlled script, <code>--passphrase-fd N</code> reads one
+      line from an already-open file descriptor. Use a passphrase of at
+      least eight characters and keep both it and the archive safe.
+      Export refuses to overwrite an existing archive. The current
+      archive plaintext cap is 256 MiB and 100,000 records/tombstones;
+      export and restore can temporarily need several times the
+      plaintext size in memory.</p>
+      <p>The archive includes event IDs, text, provenance, tombstones,
+      and source-model identity. It excludes local keys, config,
+      consent, logs, sync state, and derived indexes. Restore creates a
+      <strong>new</strong> owner-only directory and key, verifies the
+      new vault, and never merges with or replaces the live vault.
+      Inspect reopens that destination without activating capture. The
+      printed activation directions are for a fresh macOS profile with
+      no existing LatticeShadow vault or Keychain key. Do not copy it
+      over a populated profile and hope the keys negotiate.</p>
+      <blockquote>
+      <p><strong>Recovery rule:</strong> inspect the restored copy
+      first. Activation is a deliberate move into an empty profile, not
+      an overwrite button.</p>
+      </blockquote>
+      <p>A restored destination may also be inspected through an
+      explicit MCP <code>--vault-dir</code> and its own grant, without
+      making it the live vault. That is a controlled read of a separate
+      recovery copy, not an automatic restore.</p>
+      <h2 id="7-let-an-assistant-read-a-chosen-slice">7. Let an
+      assistant read a chosen slice</h2>
+      <p>The MCP server is local <strong>stdio</strong>, launched by a
+      separately configured host. It does not open a network listener.
+      It is read-only and requires a grant with at least one project
+      choice and one source. Match the source you actually saved:</p>
+      <div class="sourceCode" id="cb13"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> remember note <span class="st">&quot;Restart the widget queue&quot;</span> <span class="at">--project</span> ops <span class="at">--source</span> manual</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> mcp grant create <span class="at">--project</span> ops <span class="at">--source</span> manual</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> mcp grant list</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> mcp grant preview GRANT_ID</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> mcp serve <span class="at">--grant</span> GRANT_ID</span></code></pre></div>
+      <p>Replace <code>GRANT_ID</code> with the ID printed by create. In
+      an MCP host configuration, use the absolute path to
+      <code>shadow</code> if the host does not inherit your shell's
+      <code>PATH</code>. For the internal app candidate, its bundled CLI
+      wrapper or executable with <code>--cli</code> is the equivalent
+      entry point, but there is no public binary setup path yet. Grant
+      flags can be repeated for several projects or sources;
+      <code>--unassigned</code> includes Unassigned explicitly.
+      <code>--since</code> is inclusive and <code>--until</code>
+      exclusive; both require timezone-aware values.
+      <code>--limit</code> caps results per request. Preview the
+      eligible count and examples before connecting a host.</p>
+      <p>The tools are <code>latticeshadow.recall</code>,
+      <code>latticeshadow.current_context</code>,
+      <code>latticeshadow.summarize</code>, and
+      <code>latticeshadow.resolve</code>. They return a bounded,
+      redacted view and local <code>latticeshadow://event/...</code>
+      citations. Resolution rechecks the live event and grant. Ranking
+      scores are not answer confidence. Current context means recent
+      eligible memory, not a live screen read. Summaries here are
+      extractive. The full host configuration, protocol details, and
+      independent client evidence are in <a href="MCP.md">MCP
+      sharing</a>.</p>
+      <div class="sourceCode" id="cb14"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> mcp grant revoke GRANT_ID</span></code></pre></div>
+      <p>Revocation stops subsequent server reads; it cannot recall text
+      already sent to an assistant or written to its transcript. The
+      server runs with your user privileges, so the grant is policy
+      inside this server, not a filesystem sandbox against a separate
+      local process. Pattern redaction can miss unusual secrets. Use
+      narrow scopes and synthetic data while evaluating this alpha.</p>
+      <h2 id="8-settings-status-and-local-files">8. Settings, status,
+      and local files</h2>
+      <p><code>shadow status</code> reports the daemon, capture choices,
+      database size/count, retention, exclusions, and log path.
+      <code>shadow consent status</code> shows each surface's choice and
+      whether it still needs consent. <code>shadow config show</code>
+      prints all settings; <code>shadow config get KEY</code> reads one
+      value. For example:</p>
+      <div class="sourceCode" id="cb15"><pre
+      class="sourceCode sh"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> config get memory.provider</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> config get retention.days</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> config set retention.days 0</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> privacy-report</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="ex">shadow</span> doctor</span></code></pre></div>
+      <p>The default language-model provider is <code>none</code>.
+      <code>shadow config set memory.provider ...</code> can opt into a
+      local or remote provider, depending on its value; LLM commands may
+      then send context to that provider.
+      <code>shadow config set-key PROVIDER API_KEY</code> takes the key
+      as a command-line argument, which can appear in shell history or
+      process listings. Avoid entering a real credential that way on a
+      shared machine. Configuring remote providers and experimental
+      sync/listener switches deserves a separate review of their data
+      boundary.</p>
+      <p>Live client data normally lives in
+      <code>~/.latticeshadow</code>:</p>
+      <table>
+      <thead>
+      <tr>
+      <th>File or area</th>
+      <th>Purpose</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>shadow.sqlite</code> and SQLite sidecars</td>
+      <td>Canonical local event store.</td>
+      </tr>
+      <tr>
+      <td><code>.key</code> and macOS Keychain item</td>
+      <td>Master-key material; keep both private. Key wrapping can fall
+      back to a raw local key file if platform protection fails.</td>
+      </tr>
+      <tr>
+      <td><code>config.toml</code></td>
+      <td>Settings, capture choices, and pause state.</td>
+      </tr>
+      <tr>
+      <td><code>shadowd.log</code>, <code>launchd.out</code>,
+      <code>launchd.err</code></td>
+      <td>Operational logs; review for paths and details before
+      sharing.</td>
+      </tr>
+      <tr>
+      <td>Grant store, indexes, and snapshots</td>
+      <td>Local sharing policy and derived or recovery state. Treat as
+      private.</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>Document text in the privacy-enabled collection is encrypted.
+      Event IDs and SQLite metadata, including type, timestamps, and
+      caller-supplied metadata, are not protected the same way. Vectors
+      are rotated for similarity search; their geometry remains
+      available, so rotation is <strong>not</strong> opaque vector
+      encryption. The local model downloads from Hugging Face on first
+      use. iCloud packet sync, when separately enabled, keeps the live
+      vault, keys, and logs local while writing encrypted packets to
+      iCloud.</p>
+      <h2 id="9-stop-remove-or-start-over">9. Stop, remove, or start
+      over</h2>
+      <p>These actions have different effects:</p>
+      <table>
+      <thead>
+      <tr>
+      <th>Action</th>
+      <th>Effect</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>shadow pause</code></td>
+      <td>Stop capture while keeping the daemon and source choices;
+      survives restart.</td>
+      </tr>
+      <tr>
+      <td><code>shadow disable</code></td>
+      <td>Stop the launch agent and keep it off across logins; memories
+      remain.</td>
+      </tr>
+      <tr>
+      <td><code>shadow forget --id ID</code></td>
+      <td>Delete selected live events after confirmation; check any
+      index-cleanup warning.</td>
+      </tr>
+      <tr>
+      <td><code>shadow remove</code></td>
+      <td>Stop the agent, remove its plist and optional marked shell
+      hook, then ask whether to delete <code>~/.latticeshadow</code>.
+      Default <strong>No</strong> preserves data and key.</td>
+      </tr>
+      <tr>
+      <td><code>shadow shred</code></td>
+      <td>Destructive crypto-shred path for local history and keys. Read
+      the command and keep a recoverable backup only if that is your
+      intent.</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>For source installation, <code>shadow remove</code> does not
+      delete the Git checkout or <code>.venv</code>; remove those
+      separately if you want the development files gone. Do not manually
+      discard a key while keeping its encrypted vault. Answering Yes to
+      the <code>remove</code> data prompt deletes the local data
+      directory and attempts to remove the Keychain entry; it does not
+      erase external archives, source history files, or text already
+      shared with another program.</p>
+      <h2 id="10-troubleshooting">10. Troubleshooting</h2>
+      <table>
+      <thead>
+      <tr>
+      <th>Symptom</th>
+      <th>First check</th>
+      <th>Next step</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>shadow: command not found</code></td>
+      <td>Is <code>.venv</code> active in this shell?</td>
+      <td>Run <code>make setup</code>, then
+      <code>source .venv/bin/activate</code>, or use
+      <code>.venv/bin/shadow</code>.</td>
+      </tr>
+      <tr>
+      <td>First save or enable cannot load the model</td>
+      <td>Does the Mac have network access for the first pinned-model
+      download?</td>
+      <td>Retry after connectivity returns. Do not mix hash and
+      real-model vectors in one collection.</td>
+      </tr>
+      <tr>
+      <td><code>Daemon: STOPPED</code> after a manual save</td>
+      <td>This is expected.</td>
+      <td>Only if you want capture: <code>shadow install</code>, make
+      both source choices, then <code>shadow enable</code>.</td>
+      </tr>
+      <tr>
+      <td>Enable asks for capture choices</td>
+      <td>Check <code>shadow consent status</code>.</td>
+      <td>Run the wizard or set <strong>both</strong> clipboard and
+      terminal history to on/off explicitly.</td>
+      </tr>
+      <tr>
+      <td>Enable says the daemon source changed</td>
+      <td>A checkout update changed its integrity baseline.</td>
+      <td>Review the update, run <code>shadow install</code>, then
+      <code>shadow enable</code>. Reinstall stops a running agent.</td>
+      </tr>
+      <tr>
+      <td>Vault or key unavailable</td>
+      <td>Check an unlocked macOS login and any Keychain access
+      prompt.</td>
+      <td>Keep <code>.key</code> and <code>shadow.sqlite</code> intact;
+      use a verified backup and inspect the error before changing keys.
+      An ad-hoc app upgrade may need access approval.</td>
+      </tr>
+      <tr>
+      <td>Search finds nothing</td>
+      <td>Inspect <code>shadow timeline</code> without a query and check
+      project/source filters.</td>
+      <td>Try terms from the saved text; search does not guarantee every
+      paraphrase.</td>
+      </tr>
+      <tr>
+      <td>Capture runs but terminal events are missing</td>
+      <td>Check <code>shadow consent status</code>,
+      <code>HISTFILE</code>, and whether Zsh has written the
+      command.</td>
+      <td>Normal startup does not replay old history.</td>
+      </tr>
+      <tr>
+      <td>Old vault reports an embedding-model mismatch</td>
+      <td>Stop capture and other writers.</td>
+      <td>Run <code>shadow rebuild-index --yes</code>; it preserves
+      IDs/metadata and prints a private database backup path.</td>
+      </tr>
+      <tr>
+      <td>A deleted result still appears elsewhere</td>
+      <td>Read the <code>forget</code> cleanup output.</td>
+      <td>Check optional hot indexes, old backups, source files, and
+      copies already shared with another app.</td>
+      </tr>
+      <tr>
+      <td>Older iCloud installation refuses to open</td>
+      <td>Legacy live files may remain in the iCloud LatticeShadow
+      folder.</td>
+      <td>Stop capture and back up both folders; follow the <a
+      href="../packages/cli/README.md">CLI migration steps</a> without
+      overwriting either copy.</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>Logs live under <code>~/.latticeshadow</code>. They can include
+      local paths and operational details; inspect them locally before
+      putting excerpts in a public issue. Use <code>shadow doctor</code>
+      for a broader health check and <code>shadow audit</code> to verify
+      the signed local audit log.</p>
+      <h2 id="11-command-reference">11. Command reference</h2>
+      <p>Run <code>shadow COMMAND --help</code> for every flag. The
+      tables give the purpose and important choices; commands in the
+      experimental table are <strong>not</strong> a suggested first-run
+      checklist.</p>
+      <h3 id="everyday-memory">Everyday memory</h3>
+      <table>
+      <thead>
+      <tr>
+      <th>Command</th>
+      <th>Purpose and notable arguments</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>remember TYPE TEXT</code></td>
+      <td>Save an event. Optional <code>--project</code>,
+      <code>--source</code>, <code>--timestamp</code>, JSON
+      <code>--metadata</code>, <code>--id</code>. Prints its ID.</td>
+      </tr>
+      <tr>
+      <td><code>timeline</code></td>
+      <td>Recent events or ranked <code>--query</code>;
+      <code>--project</code>/<code>--unassigned</code>,
+      <code>--source</code>, timezone-aware
+      <code>--since</code>/<code>--until</code>, <code>--limit</code>,
+      <code>--json</code>. <code>--cursor</code> is for recent pages
+      only.</td>
+      </tr>
+      <tr>
+      <td><code>now</code></td>
+      <td>Recent private context, <code>--limit</code> or
+      <code>--json</code>; no LLM call.</td>
+      </tr>
+      <tr>
+      <td><code>search QUERY</code></td>
+      <td>Quick, unscoped search. Use <code>timeline --query</code> for
+      explicit scope.</td>
+      </tr>
+      <tr>
+      <td><code>assign-project --id ID --project NAME</code></td>
+      <td>Relabel one or several IDs; <code>--unassigned</code> clears
+      the label.</td>
+      </tr>
+      <tr>
+      <td><code>why QUERY</code></td>
+      <td>Show ranked matches and nearby recent context;
+      <code>--limit</code> defaults to five.</td>
+      </tr>
+      <tr>
+      <td><code>summarize</code></td>
+      <td>Summarize recent or <code>--query</code> results;
+      <code>--limit</code>, <code>--json</code>,
+      <code>--no-foundation</code>. May use a configured LLM.</td>
+      </tr>
+      <tr>
+      <td><code>open-context QUERY</code></td>
+      <td>Open a supported URL or reveal an absolute file path from a
+      match; <code>--dry-run</code> previews, <code>--limit</code>
+      bounds inspection.</td>
+      </tr>
+      <tr>
+      <td><code>forget</code></td>
+      <td>Select by repeated <code>--id</code>, <code>--query</code>, or
+      source/project/time filter; <code>--limit</code> bounds search
+      selection. Prints IDs and asks for <code>FORGET</code>, unless
+      <code>--yes</code>.</td>
+      </tr>
+      <tr>
+      <td><code>paste QUERY</code></td>
+      <td>Copy the top search result back to the clipboard; inspect
+      results first if a wrong copy would matter.</td>
+      </tr>
+      <tr>
+      <td><code>watch</code></td>
+      <td>Stream new clipboard captures until Ctrl-C; capture must be
+      active.</td>
+      </tr>
+      </tbody>
+      </table>
+      <h3 id="capture-recovery-and-sharing">Capture, recovery, and
+      sharing</h3>
+      <table>
+      <thead>
+      <tr>
+      <th>Command</th>
+      <th>Purpose and notable arguments</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>install</code></td>
+      <td>Prepare key and launch agent; keeps capture disabled until
+      explicit enable. Re-running stops the old agent.</td>
+      </tr>
+      <tr>
+      <td><code>consent status</code> / <code>wizard</code> /
+      <code>set SURFACE on|off</code></td>
+      <td>Inspect, answer required clipboard/terminal choices, or opt
+      into a separate surface.</td>
+      </tr>
+      <tr>
+      <td><code>enable</code> / <code>disable</code></td>
+      <td>Start the installed launch agent after consent, or stop it
+      across logins.</td>
+      </tr>
+      <tr>
+      <td><code>pause</code> / <code>resume</code></td>
+      <td>Persistently suspend or resume selected capture sources
+      without erasing choices.</td>
+      </tr>
+      <tr>
+      <td><code>status</code></td>
+      <td>Report observable daemon/capture state and local store
+      status.</td>
+      </tr>
+      <tr>
+      <td><code>config show</code> / <code>get KEY</code> /
+      <code>set KEY VALUE</code></td>
+      <td>Read or change dot-notation settings. Prefer
+      <code>consent set</code> for source choices;
+      <code>config set</code> routes known consent keys through the same
+      policy.</td>
+      </tr>
+      <tr>
+      <td><code>config set-key PROVIDER API_KEY</code></td>
+      <td>Store an LLM key in Keychain; argument may be exposed in
+      process listings or shell history.</td>
+      </tr>
+      <tr>
+      <td><code>backup export ARCHIVE</code></td>
+      <td>Create a new passphrase-encrypted canonical snapshot; optional
+      <code>--passphrase-fd</code>.</td>
+      </tr>
+      <tr>
+      <td><code>backup restore ARCHIVE --destination DIR</code></td>
+      <td>Create and verify a new private vault; never overwrites an
+      existing destination.</td>
+      </tr>
+      <tr>
+      <td><code>backup inspect --destination DIR</code></td>
+      <td>Reopen and count a restored vault without activating
+      capture.</td>
+      </tr>
+      <tr>
+      <td><code>mcp grant create</code></td>
+      <td>Require <code>--project</code> or <code>--unassigned</code>
+      and <code>--source</code>; optional repeatable scopes, time
+      bounds, <code>--limit</code>, <code>--vault-dir</code>.</td>
+      </tr>
+      <tr>
+      <td><code>mcp grant list/preview/revoke</code></td>
+      <td>Inspect policies, preview current eligible records, or stop
+      subsequent reads. Preview/revoke take a grant ID; each accepts
+      <code>--vault-dir</code>.</td>
+      </tr>
+      <tr>
+      <td><code>mcp serve --grant ID</code></td>
+      <td>Local read-only stdio server; optional
+      <code>--vault-dir</code> for an explicitly restored vault.</td>
+      </tr>
+      <tr>
+      <td><code>rebuild-index</code></td>
+      <td>Re-embed saved events after a model mismatch. Stop other
+      writers; <code>--yes</code> skips its confirmation.</td>
+      </tr>
+      <tr>
+      <td><code>remove</code></td>
+      <td>Stop agent/remove plist and shell hook, then ask whether to
+      delete local data. Default preserves it.</td>
+      </tr>
+      <tr>
+      <td><code>shell enable/disable</code></td>
+      <td>Add or remove the marked optional Zsh widget source line; no
+      key binding is installed.</td>
+      </tr>
+      <tr>
+      <td><code>gui</code></td>
+      <td>Launch the AppKit menu bar client in a logged-in session.</td>
+      </tr>
+      </tbody>
+      </table>
+      <h3 id="diagnostics-and-experimental-commands">Diagnostics and
+      experimental commands</h3>
+      <table>
+      <thead>
+      <tr>
+      <th>Command</th>
+      <th>What it does / maturity</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>doctor</code></td>
+      <td>Local diagnostic health check.</td>
+      </tr>
+      <tr>
+      <td><code>privacy-report</code></td>
+      <td>Inspect local privacy posture; <code>--json</code> available.
+      This is a report, not a security certificate.</td>
+      </tr>
+      <tr>
+      <td><code>privacy-test</code></td>
+      <td>Synthetic leakage harness with count/dimension/query options
+      and optional JSON output.</td>
+      </tr>
+      <tr>
+      <td><code>audit</code></td>
+      <td>Verify the signed local audit log; <code>--json</code>
+      available.</td>
+      </tr>
+      <tr>
+      <td><code>trust local/list/add/revoke</code></td>
+      <td>Manage experimental peer identities and trust.</td>
+      </tr>
+      <tr>
+      <td><code>repair list/status</code></td>
+      <td>Review or change status of human-approved repair
+      proposals.</td>
+      </tr>
+      <tr>
+      <td><code>native intents</code></td>
+      <td>Print the optional native companion's App Intents command
+      contract.</td>
+      </tr>
+      <tr>
+      <td><code>bench moonshot</code></td>
+      <td>Synthetic retrieval benchmark with selected engines; not a
+      user-data performance guarantee.</td>
+      </tr>
+      <tr>
+      <td><code>sleep</code></td>
+      <td>Experimental REM-style consolidation. May involve a configured
+      LLM.</td>
+      </tr>
+      <tr>
+      <td><code>shred</code></td>
+      <td>Destructive local crypto-shred path; inspect before
+      using.</td>
+      </tr>
+      <tr>
+      <td><code>calibrate</code></td>
+      <td>Experimental alignment/drift check
+      (<code>--check</code>).</td>
+      </tr>
+      <tr>
+      <td><code>compile</code> / <code>recall QUERY</code></td>
+      <td>Experimental holographic daily index and query; distinct from
+      ordinary <code>timeline</code> recall.</td>
+      </tr>
+      <tr>
+      <td><code>unswap QUERY</code></td>
+      <td>Experimental state restoration from remembered context.</td>
+      </tr>
+      <tr>
+      <td><code>compose</code> / <code>fix</code> /
+      <code>evolve</code></td>
+      <td>Experimental command suggestion, traceback repair, and
+      review/apply of pending code mutations. Review any proposed
+      command or diff yourself.</td>
+      </tr>
+      <tr>
+      <td><code>time-travel</code></td>
+      <td>Experimental environment snapshots (<code>--list</code>) and
+      rollback (<code>--rollback HASH</code>); potentially changes
+      files.</td>
+      </tr>
+      <tr>
+      <td><code>get-ghost-paste</code> / <code>get-loop-fix</code> /
+      <code>ghost-paste QUERY</code></td>
+      <td>Experimental ambient/speculative helpers.</td>
+      </tr>
+      <tr>
+      <td><code>ask QUESTION</code> / <code>recap</code> /
+      <code>context</code></td>
+      <td>LLM-powered memory features; data may reach a configured
+      provider.</td>
+      </tr>
+      <tr>
+      <td><code>pot generate/verify</code></td>
+      <td>Experimental signed proof-file commands; not a zk-SNARK
+      guarantee.</td>
+      </tr>
+      </tbody>
+      </table>
+      <h3 id="gui-action-reference">GUI action reference</h3>
+      <table>
+      <thead>
+      <tr>
+      <th>Current label</th>
+      <th>Action / closest CLI command</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>Open Recall…</code></td>
+      <td>Open the Recall panel; <code>shadow gui</code> starts the menu
+      bar client.</td>
+      </tr>
+      <tr>
+      <td><code>Keyboard shortcut</code></td>
+      <td>Choose <code>Off</code>, <code>Option–Space</code>,
+      <code>Control–Option–Space</code>, or
+      <code>Command–Option–Space</code>.</td>
+      </tr>
+      <tr>
+      <td><code>Pause capture</code> / <code>Resume capture</code></td>
+      <td>Change the persistent capture state; <code>shadow pause</code>
+      / <code>shadow resume</code>.</td>
+      </tr>
+      <tr>
+      <td><code>Unassigned only</code></td>
+      <td>Limit panel results to events without a project;
+      <code>shadow timeline --unassigned</code>.</td>
+      </tr>
+      <tr>
+      <td><code>Copy</code></td>
+      <td>Copy the selected event's complete text to the clipboard.</td>
+      </tr>
+      <tr>
+      <td><code>Open link/file</code></td>
+      <td>Open a supported web link or reveal an existing local file;
+      <code>shadow open-context</code>.</td>
+      </tr>
+      <tr>
+      <td><code>Assign project</code></td>
+      <td>Set a project or leave it blank for Unassigned;
+      <code>shadow assign-project</code>.</td>
+      </tr>
+      <tr>
+      <td><code>Forget…</code></td>
+      <td>Confirm deletion of the selected live event;
+      <code>shadow forget --id ID</code>.</td>
+      </tr>
+      </tbody>
+      </table>
+      <h2 id="12-glossary-and-limits">12. Glossary and limits</h2>
+      <table>
+      <thead>
+      <tr>
+      <th>Term</th>
+      <th>Meaning</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><strong>Event</strong></td>
+      <td>One saved unit of text plus an ID, type, source, time, and
+      optional project/metadata.</td>
+      </tr>
+      <tr>
+      <td><strong>Canonical vault</strong></td>
+      <td>The active SQLite-backed record store used for normal memory
+      views. Derived indexes can mirror it.</td>
+      </tr>
+      <tr>
+      <td><strong>Source</strong></td>
+      <td>Exact label describing where an event came from; used by
+      filters and MCP grants. Defaults to the event type for manual
+      saves.</td>
+      </tr>
+      <tr>
+      <td><strong>Project</strong></td>
+      <td>Optional exact label. Unassigned is a real scope choice, not a
+      wildcard.</td>
+      </tr>
+      <tr>
+      <td><strong>Occurrence time / capture time</strong></td>
+      <td>When the event happened / when LatticeShadow recorded it.
+      Occurrence may be inferred.</td>
+      </tr>
+      <tr>
+      <td><strong>Grant</strong></td>
+      <td>Local policy selecting projects, sources, time bounds, and a
+      result cap for one MCP server.</td>
+      </tr>
+      <tr>
+      <td><strong>Citation</strong></td>
+      <td>A <code>latticeshadow://event/...</code> local reference
+      resolved against the current vault and grant, not a web link.</td>
+      </tr>
+      <tr>
+      <td><strong>Retention</strong></td>
+      <td>Optional age-based deletion from live indexes, not erasure of
+      every external copy.</td>
+      </tr>
+      <tr>
+      <td><strong>Ad-hoc signed app</strong></td>
+      <td>Internal test bundle with a local code signature; it is not
+      Developer ID signed or notarized for public distribution.</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>LatticeShadow is meant to make <em>chosen</em> work context
+      recoverable with clear source and deletion behavior. It is not a
+      password manager, exhaustive activity logger, security boundary
+      against other local processes, or guarantee that every secret is
+      detected. A local model does not make bad input safe, and rotated
+      vectors are not opaque encryption. Simulated P2P proofs are not
+      zk-SNARKs. Source setup and ordinary CLI flows work today; the
+      full desktop, upgrade, long-run, and public-binary validation is
+      still in progress. The <a href="CAPABILITIES.md">capability
+      guide</a> and <a href="ALPHA_PLAN.md">alpha evidence ledger</a>
+      track what has actually been tested.</p>
+      <h3 id="for-maintainers">For maintainers</h3>
+      <p>Keep this manual's <a href="#11-command-reference">command
+      reference</a> aligned with the <code>argparse</code> definitions
+      in <a
+      href="../packages/cli/latticeshadow/shadow_cli.py"><code>shadow_cli.py</code></a>
+      and its <a href="#gui-action-reference">GUI action reference</a>
+      aligned with the labels in <a
+      href="../packages/cli/latticeshadow/menu.py"><code>menu.py</code></a>.
+      Update the manual in the same change that renames a command,
+      option, or visible action. The tutorial's
+      <code>--source manual</code> is deliberate:
+      <code>remember note</code> otherwise defaults to source
+      <code>note</code>, which would not match the example MCP
+      grant.</p>
+      <p>The offline <a href="USER_MANUAL.html">print-ready HTML
+      edition</a> is generated from this Markdown by <a
+      href="../scripts/render_user_manual.sh"><code>render_user_manual.sh</code></a>
+      using Pandoc. Keep the Markdown as the source of truth; regenerate
+      the HTML after editing it. The cover mark is inline SVG, and the
+      manual includes no simulated product screenshots.</p>
+    </main>
+  </div>
+  <footer class="site-footer"><span>LatticeShadow · Version 0.2.0 alpha</span><span>Source and evidence: github.com/steph4n-gh/latticeshadow</span></footer>
+</body>
+</html>
