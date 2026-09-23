@@ -241,7 +241,7 @@ def test_pause_control_uses_persistent_consent_state():
 
 
 def test_native_panel_keeps_search_results_preview_and_actions_accessible():
-    import AppKit
+    from latticeshadow.menu import AppKit
 
     class Delegate(AppKit.NSObject):
         pass
