@@ -253,6 +253,13 @@ class Collection:
     def revision(self) -> int:
         return self._store.revision()
 
+    def repair_status(self) -> Dict[str, Any]:
+        """Report a committed record whose derived index still needs repair."""
+        return self._store.repair_status()
+
+    def mark_repair_needed(self, error: str) -> None:
+        self._store.mark_repair_needed(error)
+
     # ── Search ─────────────────────────────────────────────────────────────
 
     def search(self, query: str, n_results: int = 10,

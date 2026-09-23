@@ -13,6 +13,7 @@ import sqlite3
 import json
 import hashlib
 import time
+import tempfile
 import torch
 import numpy as np
 from typing import Optional, List, Tuple, Dict, Any, Sequence
@@ -279,10 +280,11 @@ class VectorStore:
 
     def _write_vector_manifest(self, revision: int) -> None:
         path = self._vector_manifest_path()
-        temporary = path + ".tmp"
         value = {"revision": revision, "count": len(self._doc_ids),
                  "dimension": self._memmap_dim, "drosophila": self._store_drosophila}
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd, temporary = tempfile.mkstemp(
+            prefix=os.path.basename(path) + ".tmp-", dir=os.path.dirname(os.path.abspath(path))
+        )
         os.fchmod(fd, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -1587,6 +1589,8 @@ class VectorStore:
                     embedding_dim INTEGER,
                     embedding_model TEXT,
                     restored_from_model TEXT,
+                    derived_repair_needed INTEGER NOT NULL DEFAULT 0,
+                    derived_repair_error TEXT,
                     encrypted_key_blob TEXT,
                     vector_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1627,6 +1631,14 @@ class VectorStore:
                 conn.execute('ALTER TABLE collection_meta ADD COLUMN restored_from_model TEXT')
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            try:
+                conn.execute('ALTER TABLE collection_meta ADD COLUMN derived_repair_needed INTEGER NOT NULL DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute('ALTER TABLE collection_meta ADD COLUMN derived_repair_error TEXT')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
 
     def revision(self) -> int:
@@ -1636,6 +1648,25 @@ class VectorStore:
                 "SELECT revision FROM collection_revision WHERE name = ?", (self.collection,)
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def repair_status(self) -> Dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT derived_repair_needed, derived_repair_error FROM collection_meta WHERE name = ?",
+                (self.collection,),
+            ).fetchone()
+        return {"needed": bool(row and row[0]), "error": row[1] if row else None}
+
+    def mark_repair_needed(self, error: str) -> None:
+        if not isinstance(error, str) or len(error) > 128:
+            raise ValueError("repair error must be a short class name")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO collection_meta (name, derived_repair_needed, derived_repair_error) "
+                "VALUES (?, 1, ?) ON CONFLICT(name) DO UPDATE SET "
+                "derived_repair_needed = 1, derived_repair_error = excluded.derived_repair_error",
+                (self.collection, error),
+            )
 
     def get_records(self, ids: List[str]) -> List[Dict[str, Any]]:
         """Read canonical rows by ID, preserving input order and omitting missing IDs."""
@@ -1842,7 +1873,12 @@ class VectorStore:
                 "SELECT revision FROM collection_revision WHERE name = ?", (self.collection,)
             ).fetchone()
             snapshot_revision = int(revision_row[0]) if revision_row else 0
+            repair_row = conn.execute(
+                "SELECT derived_repair_needed FROM collection_meta WHERE name = ?", (self.collection,)
+            ).fetchone()
+            repair_needed = bool(repair_row and repair_row[0])
         self._loaded_revision = snapshot_revision
+        force_rebuild = force_rebuild or repair_needed
 
         self._doc_ids = []
         self._entropies = []
@@ -1951,6 +1987,12 @@ class VectorStore:
 
         logger.debug("Loaded %d vectors for collection '%s' (FAISS: %s)",
                       len(self._doc_ids), self.collection, self._use_faiss)
+        if repair_needed:
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE collection_meta SET derived_repair_needed = 0, derived_repair_error = NULL "
+                    "WHERE name = ?", (self.collection,)
+                )
 
     def _refresh_if_changed(self):
         """Refresh process-local vector IDs and sidecars after another writer commits."""

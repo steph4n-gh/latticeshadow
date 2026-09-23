@@ -5,6 +5,7 @@ import base64
 import hashlib
 import heapq
 import json
+import logging
 import os
 import threading
 import uuid
@@ -18,6 +19,7 @@ MAX_TEXT_BYTES = 1024 * 1024
 MAX_METADATA_BYTES = 64 * 1024
 MAX_LABEL_BYTES = 256
 MAX_IDS = 1000
+logger = logging.getLogger(__name__)
 _SEARCH_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
 _SEARCH_LOCK = threading.RLock()
 
@@ -315,7 +317,24 @@ def add_event(vault: Any, event_type: str, text: str, *, source: str | None = No
         raise ValueError("event metadata must be JSON serializable") from exc
     if len(encoded) > MAX_METADATA_BYTES:
         raise ValueError(f"event metadata must be at most {MAX_METADATA_BYTES} UTF-8 bytes")
-    vault.add(documents=[text], ids=[doc_id], metadatas=[user_meta])
+    try:
+        vault.add(documents=[text], ids=[doc_id], metadatas=[user_meta])
+    except Exception as exc:
+        # A derived sidecar can fail after the canonical SQLite transaction.
+        # Returning the committed ID makes a blind capture retry unnecessary.
+        try:
+            persisted_after_error = get_events(vault, [doc_id])
+        except Exception:
+            raise exc
+        if not persisted_after_error:
+            raise
+        assert_same_event(persisted_after_error[0])
+        try:
+            vault.mark_repair_needed(type(exc).__name__)
+        except Exception as repair_exc:
+            logger.error("Could not mark event %s for index repair: %s", doc_id, type(repair_exc).__name__)
+        logger.warning("Event %s committed; derived index requires repair (%s)", doc_id, type(exc).__name__)
+        return doc_id
     persisted = get_events(vault, [doc_id])
     if not persisted:
         raise RuntimeError("Canonical event was not persisted")

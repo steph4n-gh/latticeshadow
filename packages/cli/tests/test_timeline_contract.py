@@ -151,3 +151,22 @@ def test_conflicting_retry_race_rechecks_canonical_row(vaults, monkeypatch):
     with pytest.raises(ValueError, match="different content"):
         add_event(vault, "note", "my content", source="manual", doc_id="same-id")
     assert get_events(rival, ["same-id"])[0]["text"] == "rival content"
+
+
+def test_postcommit_sidecar_failure_returns_id_and_marks_repair(vaults, monkeypatch):
+    vault, path = vaults
+    original_add = vault.add
+
+    def fail_after_commit(*args, **kwargs):
+        original_add(*args, **kwargs)
+        raise OSError("synthetic sidecar failure")
+
+    monkeypatch.setattr(vault, "add", fail_after_commit)
+    doc_id = add_event(vault, "note", "one committed event", source="manual")
+    assert vault.count() == 1
+    assert vault.repair_status() == {"needed": True, "error": "OSError"}
+    assert add_event(vault, "note", "one committed event", source="manual", doc_id=doc_id) == doc_id
+    assert vault.count() == 1
+    reopened = open_main_vault(path, "disposable-key")
+    assert reopened.repair_status() == {"needed": False, "error": None}
+    assert get_events(reopened, [doc_id])[0]["text"] == "one committed event"
