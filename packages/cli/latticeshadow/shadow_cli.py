@@ -150,21 +150,28 @@ def get_or_create_master_key() -> str:
         with open(key_file, "r") as f:
             stored = f.read().strip()
         if stored:
-            unwrapped = decode_and_unwrap(stored)
+            is_raw_key = len(stored) == 64 and all(c in "0123456789abcdef" for c in stored)
+            if keychain_lookup_failed and not is_raw_key:
+                raise PermissionError(
+                    "Existing master key could not be unlocked. The key file was left unchanged; "
+                    "try again from an unlocked macOS login session."
+                )
+            unwrapped = None if keychain_lookup_failed else decode_and_unwrap(stored)
             if unwrapped:
                 try:
                     keychain.store_key(stored)
                 except Exception:
                     pass
                 return unwrapped
-            elif len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
+            elif is_raw_key:
                 try:
-                    wrapped = wrap_and_encode(stored)
-                    keychain.store_key(wrapped)
-                    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(wrapped)
-                    print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
+                    if not keychain_lookup_failed:
+                        wrapped = wrap_and_encode(stored)
+                        keychain.store_key(wrapped)
+                        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(wrapped)
+                        print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 except Exception:
                     # Keep using the intact legacy file if wrapping is unavailable.
                     pass

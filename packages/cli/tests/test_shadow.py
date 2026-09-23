@@ -961,6 +961,61 @@ def test_existing_vault_without_key_refuses_new_key(setup_test_env, monkeypatch)
     assert not setup_test_env["key_file"].exists()
 
 
+def test_keychain_command_timeout_reports_locked_keychain(monkeypatch):
+    import subprocess
+    from latticeshadow import keychain
+
+    def waits_for_login(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="security", timeout=10)
+
+    monkeypatch.setattr(keychain.subprocess, "run", waits_for_login)
+    with pytest.raises(keychain.KeychainLocked, match="timed out"):
+        keychain._run_security(["find-generic-password"])
+
+
+@pytest.mark.parametrize("component", ["shadow_cli", "shadowd"])
+def test_locked_keychain_fails_fast_without_unwrapping_file(
+        setup_test_env, monkeypatch, component):
+    from latticeshadow import keychain, security
+
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text("existing-wrapped-key", encoding="ascii")
+    original = key_file.read_bytes()
+
+    def locked():
+        raise keychain.KeychainLocked("locked")
+
+    monkeypatch.setattr(keychain, "retrieve_key", locked)
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not wait for locked Keychain"))
+    with pytest.raises(PermissionError, match="Existing master key could not be unlocked"):
+        setup_test_env[component].get_or_create_master_key()
+    assert key_file.read_bytes() == original
+
+
+@pytest.mark.parametrize("component", ["shadow_cli", "shadowd"])
+def test_locked_keychain_still_reads_legacy_raw_file(
+        setup_test_env, monkeypatch, component):
+    from latticeshadow import keychain, security
+
+    raw_key = "a" * 64
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text(raw_key, encoding="ascii")
+
+    def locked():
+        raise keychain.KeychainLocked("locked")
+
+    monkeypatch.setattr(keychain, "retrieve_key", locked)
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not wait for locked Keychain"))
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not migrate while locked"))
+    assert setup_test_env[component].get_or_create_master_key() == raw_key
+    assert key_file.read_text(encoding="ascii") == raw_key
+
+
 def test_daemon_refuses_to_replace_inaccessible_existing_key(setup_test_env, monkeypatch):
     from latticeshadow import security
 
