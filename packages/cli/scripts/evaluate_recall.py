@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare shipped encrypted-vault search with two deliberately simple baselines.
+"""Compare production recall with legacy and deliberately simple baselines.
 
 Only authored synthetic events are inserted. Reports and temporary databases live
 outside Git. This is a relevance study, not the 10,000-event latency benchmark.
@@ -28,6 +28,7 @@ sys.path[:0] = [str(CLI_DIR), str(REPO_ROOT / "packages" / "db")]
 
 from evaluation.scenarios import SCENARIOS
 from latticeshadow.retrieval import RetrievalIndex
+from latticeshadow.timeline import search_events
 from latticeshadow.vaults import EMBEDDING_DIM, embedding_model_id, open_main_vault, _local_model
 
 
@@ -187,13 +188,18 @@ def evaluate(db_path: str) -> dict:
     ranker = RetrievalIndex(lambda texts: np.asarray([vector_lookup[text] for text in texts], dtype=np.float32))
     ranker.refresh(docs, revision=1)
     all_ids = [doc["id"] for doc in docs]
-    results = {"shipped_encrypted_hybrid": {}, "exact_cosine": {}, "keyword_overlap": {}, "memory_fusion": {}}
+    results = {"production_scoped": {}, "legacy_encrypted_hybrid": {},
+               "exact_cosine": {}, "keyword_overlap": {}, "memory_fusion": {}}
     timings = Counter()
     for case, qvector in zip(cases, query_vectors):
         query_id, query = case["id"], case["query"]
         t0 = time.perf_counter()
-        results["shipped_encrypted_hybrid"][query_id] = list(vault.search(query, n_results=10, hybrid=True).ids)
-        timings["shipped_encrypted_hybrid"] += time.perf_counter() - t0
+        results["production_scoped"][query_id] = [event["id"] for event in
+                                                  search_events(vault, query, limit=10)]
+        timings["production_scoped"] += time.perf_counter() - t0
+        t0 = time.perf_counter()
+        results["legacy_encrypted_hybrid"][query_id] = list(vault.search(query, n_results=10, hybrid=True).ids)
+        timings["legacy_encrypted_hybrid"] += time.perf_counter() - t0
         t0 = time.perf_counter()
         similarities = doc_vectors @ qvector
         order = np.argsort(-similarities, kind="stable")[:10]
@@ -220,7 +226,7 @@ def evaluate(db_path: str) -> dict:
         },
         "limitations": [
             "Synthetic authored corpus and paraphrases are not a sample of a user's private history.",
-            "Privacy-mode hybrid BM25 indexes ciphertext in the current baseline.",
+            "The legacy privacy-mode hybrid baseline indexes ciphertext; production recall uses an ephemeral plaintext index with canonical rechecks.",
             "Exact cosine uses batch model encoding; timings are not user-visible search latency.",
             "No-answer top-five output is reported separately; nearest-neighbor output is not abstention.",
         ],

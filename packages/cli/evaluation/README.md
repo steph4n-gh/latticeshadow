@@ -15,9 +15,9 @@ python3 packages/cli/scripts/evaluate_recall.py
 The script requires the CLI/DB dependencies and the pinned local embedding
 model. Its JSON report is written under ignored `benchmark_results/` and
 contains the fixture hash, model revision, hit@5, MRR@10, missing-answer output,
-and individual failed questions. It compares the shipped encrypted-vault
-hybrid path, exact cosine with the same model, a simple in-memory keyword
-baseline, and the in-memory fusion ranker.
+and individual failed questions. It compares production scoped recall, the
+legacy encrypted-vault hybrid path, exact cosine with the same model, a simple
+in-memory keyword baseline, and the in-memory fusion ranker.
 
 The held-out questions are public and synthetic, so their score is a regression
 signal rather than a guarantee about private histories. Keep whole families in
