@@ -1,219 +1,292 @@
-"""Normalized memory timeline helpers for the CLI.
-
-This layer is intentionally additive: it reads existing LatticeDB rows and
-metadata JSON without changing the SQLite schema.
-"""
-
+"""Canonical, scoped memory events shared by CLI, desktop and MCP."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
-import time
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
-EVENT_TYPES = {
-    "clipboard",
-    "terminal",
-    "ambient",
-    "file",
-    "url",
-    "app",
-    "repair",
-    "sync",
-    "model_call",
-}
-
-EVENT_PREFIXES = {
-    "clipboard": "clip",
-    "terminal": "cmd",
-    "ambient": "amb",
-    "file": "file",
-    "url": "url",
-    "app": "app",
-    "repair": "repair",
-    "sync": "sync",
-    "model_call": "model",
-}
+EVENT_TYPES = {"clipboard", "terminal", "ambient", "file", "url", "app", "repair", "sync", "model_call", "note"}
+EVENT_PREFIXES = {"clipboard": "clip", "terminal": "cmd", "ambient": "amb", "file": "file", "url": "url", "app": "app", "repair": "repair", "sync": "sync", "model_call": "model", "note": "note"}
+MAX_TEXT_BYTES = 1024 * 1024
+MAX_METADATA_BYTES = 64 * 1024
+MAX_LABEL_BYTES = 256
+MAX_IDS = 1000
 
 
-def _parse_metadata(raw: str | bytes | None) -> dict[str, Any]:
-    if not raw:
-        return {}
-    try:
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8", errors="replace")
-        value = json.loads(raw)
-        return value if isinstance(value, dict) else {}
-    except (TypeError, json.JSONDecodeError):
-        return {}
-
-
-def _decrypt_document(vault: Any, document: Any) -> str:
-    if document is None:
-        return ""
-    text = str(document)
-    privacy = getattr(vault, "_privacy", None)
-    if privacy and text.startswith("enc:"):
+def _utc(value: Any, *, legacy: bool = False) -> str:
+    if isinstance(value, datetime):
+        date = value
+    elif legacy and isinstance(value, (int, float)) and not isinstance(value, bool):
+        date = datetime.fromtimestamp(value, timezone.utc)
+    elif isinstance(value, str):
         try:
-            return privacy.decrypt_document(text)
-        except Exception:
-            return "[encrypted document unavailable]"
-    return text
+            date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("timestamp must be an ISO 8601 time") from exc
+    else:
+        raise TypeError("timestamp must be a timezone-aware datetime or ISO 8601 string")
+    if date.tzinfo is None or date.utcoffset() is None:
+        if not legacy:
+            raise ValueError("timestamp must include a timezone")
+        date = date.replace(tzinfo=timezone.utc)
+    return date.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _infer_event_type(doc_id: str, metadata: dict[str, Any]) -> str:
-    source = str(metadata.get("event_type") or metadata.get("source") or "").lower()
-    if source in EVENT_TYPES:
-        return source
-    if doc_id.startswith("cmd_"):
-        return "terminal"
-    if doc_id.startswith("clip_"):
-        return "clipboard"
-    if metadata.get("url"):
-        return "url"
-    if metadata.get("app") or metadata.get("application"):
-        return "app"
-    return "clipboard"
+def _label(value: Any, name: str, *, nullable: bool = False) -> str | None:
+    if nullable and value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value.encode("utf-8")) > MAX_LABEL_BYTES:
+        raise ValueError(f"{name} must be a nonempty string of at most {MAX_LABEL_BYTES} UTF-8 bytes")
+    return value
 
 
-def _row_to_event(vault: Any, row: tuple[Any, ...], score: float | None = None) -> dict[str, Any]:
-    doc_id, document, metadata_json, collection, created_at, last_accessed = row
-    metadata = _parse_metadata(metadata_json)
-    text = _decrypt_document(vault, document)
-    event_type = _infer_event_type(str(doc_id), metadata)
-    event = {
-        "id": str(doc_id),
-        "type": event_type,
-        "source": metadata.get("source", event_type),
-        "collection": collection,
-        "timestamp": created_at,
-        "last_accessed": last_accessed,
-        "text": text,
-        "metadata": metadata,
-    }
-    if score is not None:
-        event["score"] = float(score)
-    return event
+def _scope(scope: dict[str, Any] | None) -> dict[str, Any]:
+    if scope is None:
+        scope = {}
+    if not isinstance(scope, dict) or set(scope) - {"projects", "sources", "since", "until"}:
+        raise ValueError("scope accepts projects, sources, since and until")
+    result = {}
+    for field in ("projects", "sources"):
+        values = scope.get(field)
+        if values is not None:
+            if not isinstance(values, (tuple, list)) or len(values) > 100:
+                raise ValueError(f"{field} must be a list or tuple with at most 100 entries")
+            if field == "sources" and any(value is None for value in values):
+                raise ValueError("sources cannot contain null")
+            values = tuple(_label(value, field, nullable=field == "projects") for value in values)
+        result[field] = values
+    for field in ("since", "until"):
+        result[field] = _utc(scope[field]) if scope.get(field) is not None else None
+    if result["since"] and result["until"] and result["since"] >= result["until"]:
+        raise ValueError("scope since must be earlier than until")
+    return result
 
 
-def _rows_by_id(vault: Any, ids: Iterable[str]) -> dict[str, tuple[Any, ...]]:
-    ids = [doc_id for doc_id in ids if doc_id]
-    if not ids:
-        return {}
-    placeholders = ",".join("?" for _ in ids)
-    collection = getattr(vault, "name", "clipboard")
-    with vault._store._connect() as conn:
-        cursor = conn.execute(
-            f"""SELECT doc_id, document, metadata_json, collection, created_at, last_accessed
-                FROM vectors
-                WHERE collection = ? AND doc_id IN ({placeholders})""",
-            [collection, *ids],
-        )
-        return {str(row[0]): row for row in cursor.fetchall()}
+def _metadata(raw: str | bytes | None) -> dict[str, Any]:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    value = json.loads(raw or "{}")
+    if not isinstance(value, dict):
+        raise ValueError("Stored event metadata must be an object")
+    return value
 
 
-def fetch_events(
-    vault: Any,
-    limit: int = 20,
-    source: str | None = None,
-    since: str | None = None,
-    until: str | None = None,
-) -> list[dict[str, Any]]:
-    limit = max(1, min(int(limit), 500))
-    collection = getattr(vault, "name", "clipboard")
-    clauses = ["collection = ?"]
-    params: list[Any] = [collection]
-    if since:
-        clauses.append("created_at >= ?")
-        params.append(since)
-    if until:
-        clauses.append("created_at <= ?")
-        params.append(until)
-
-    overfetch = max(limit * 5, limit)
-    with vault._store._connect() as conn:
-        cursor = conn.execute(
-            f"""SELECT doc_id, document, metadata_json, collection, created_at, last_accessed
-                FROM vectors
-                WHERE {' AND '.join(clauses)}
-                ORDER BY created_at DESC
-                LIMIT ?""",
-            [*params, overfetch],
-        )
-        events = [_row_to_event(vault, row) for row in cursor.fetchall()]
-
-    if source:
-        wanted = source.lower()
-        events = [
-            event for event in events
-            if str(event.get("type", "")).lower() == wanted
-            or str(event.get("source", "")).lower() == wanted
-        ]
-    return events[:limit]
+def _event(vault: Any, record: dict[str, Any]) -> dict[str, Any]:
+    meta = _metadata(record["metadata_json"])
+    doc_id = str(record["doc_id"])
+    event_type = str(meta.get("event_type") or meta.get("source") or "").lower()
+    if event_type not in EVENT_TYPES:
+        event_type = "terminal" if doc_id.startswith("cmd_") else "clipboard"
+    source = meta.get("source")
+    if not isinstance(source, str) or not source:
+        source = "unknown"
+    captured_at = _utc(meta.get("captured_at") or record["created_at"], legacy=True)
+    occurrence = meta.get("timestamp")
+    timestamp = _utc(occurrence if occurrence is not None else record["created_at"], legacy=True)
+    meta = dict(meta)
+    meta["timestamp_inferred"] = bool(meta.get("timestamp_inferred", occurrence is None))
+    project = meta.get("project")
+    if project is not None and not isinstance(project, str):
+        raise ValueError(f"Stored event {doc_id} has invalid project metadata")
+    document = record["document"] or ""
+    if document.startswith("enc:"):
+        privacy = getattr(vault, "_privacy", None)
+        if privacy is None:
+            raise ValueError(f"Encrypted event {doc_id} cannot be decrypted")
+        document = privacy.decrypt_document(document)
+    return {"id": doc_id, "type": event_type, "source": source,
+            "collection": record["collection"], "timestamp": timestamp,
+            "captured_at": captured_at, "project": project,
+            "last_accessed": record["last_accessed"], "text": document,
+            "metadata": meta}
 
 
-def search_events(vault: Any, query: str, limit: int = 10) -> list[dict[str, Any]]:
-    limit = max(1, min(int(limit), 100))
-    result = vault.search(query, n_results=limit, hybrid=True)
+def _matches(event: dict[str, Any], selected: dict[str, Any]) -> bool:
+    return (selected["projects"] is None or event["project"] in selected["projects"]) and \
+           (selected["sources"] is None or event["source"] in selected["sources"]) and \
+           (selected["since"] is None or event["timestamp"] >= selected["since"]) and \
+           (selected["until"] is None or event["timestamp"] < selected["until"])
+
+
+def event_matches_scope(event: dict[str, Any], scope: dict[str, Any] | None) -> bool:
+    """Apply the same scope semantics to cached candidates and live records."""
+    return _matches(event, _scope(scope))
+
+
+def iter_events(vault: Any, *, scope: dict[str, Any] | None = None) -> Iterator[dict[str, Any]]:
+    """Scan canonical rows in bounded pages, applying scope before ranking."""
+    selected = _scope(scope)
+    if selected["projects"] == () or selected["sources"] == ():
+        return
+    cursor = 0
+    while True:
+        records, following = vault.scan_records(after_row_id=cursor, limit=500)
+        for record in records:
+            event = _event(vault, record)
+            if _matches(event, selected):
+                yield event
+        if following is None:
+            return
+        cursor = following
+
+
+def _scope_digest(scope: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _make_cursor(timestamp: str, doc_id: str, digest: str) -> str:
+    raw = json.dumps([timestamp, doc_id, digest], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _read_cursor(cursor: str, digest: str) -> tuple[str, str]:
+    if not isinstance(cursor, str) or len(cursor) > 1024:
+        raise ValueError("invalid timeline cursor")
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        value = json.loads(raw)
+        if not isinstance(value, list) or len(value) != 3 or value[2] != digest:
+            raise ValueError
+        return _utc(value[0]), _label(value[1], "cursor ID")
+    except (ValueError, TypeError, UnicodeError) as exc:
+        raise ValueError("invalid or mismatched timeline cursor") from exc
+
+
+def fetch_events(vault: Any, *, scope: dict[str, Any] | None = None,
+                 limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
+    if not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise ValueError("timeline limit must be between 1 and 500")
+    selected = _scope(scope)
+    digest = _scope_digest(selected)
+    marker = _read_cursor(cursor, digest) if cursor is not None else None
+    events = sorted(iter_events(vault, scope=selected),
+                    key=lambda event: (event["timestamp"], event["id"]), reverse=True)
+    if marker:
+        events = [event for event in events if (event["timestamp"], event["id"]) < marker]
+    page = events[:limit]
+    next_cursor = (_make_cursor(page[-1]["timestamp"], page[-1]["id"], digest)
+                   if len(events) > limit else None)
+    return {"events": page, "next_cursor": next_cursor}
+
+
+def get_events(vault: Any, ids: Iterable[str], *,
+               scope: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    chosen = list(dict.fromkeys(ids))
+    if len(chosen) > MAX_IDS or any(not isinstance(value, str) or not value for value in chosen):
+        raise ValueError(f"get_events accepts at most {MAX_IDS} nonempty IDs")
+    selected = _scope(scope)
+    if selected["projects"] == () or selected["sources"] == ():
+        return []
+    records = []
+    for start in range(0, len(chosen), 500):
+        records.extend(vault.get_records(chosen[start:start + 500]))
+    return [event for record in records if _matches((event := _event(vault, record)), selected)]
+
+
+def search_events(vault: Any, query: str, *, scope: dict[str, Any] | None = None,
+                  limit: int = 10) -> list[dict[str, Any]]:
+    if not isinstance(query, str) or not query.strip() or len(query.encode("utf-8")) > 4096:
+        raise ValueError("query must be nonempty and at most 4096 UTF-8 bytes")
+    if not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("search limit must be between 1 and 100")
+    selected = _scope(scope)
+    candidate_ids = [event["id"] for event in iter_events(vault, scope=selected)] if scope is not None else None
+    if candidate_ids == []:
+        return []
+    if candidate_ids is None:
+        result = vault.search(query, n_results=limit, hybrid=True)
+    else:
+        result = vault.search(query, n_results=limit, hybrid=True, candidate_ids=candidate_ids)
     ids = list(getattr(result, "ids", []) or [])
-    documents = list(getattr(result, "documents", []) or [])
-    metadatas = list(getattr(result, "metadatas", []) or [])
     scores = list(getattr(result, "scores", []) or [])
-    rows = _rows_by_id(vault, ids)
-
-    events: list[dict[str, Any]] = []
+    hydrated = {event["id"]: event for event in get_events(vault, ids, scope=selected)}
+    events = []
     for idx, doc_id in enumerate(ids):
-        if doc_id in rows:
-            event = _row_to_event(
-                vault,
-                rows[doc_id],
-                scores[idx] if idx < len(scores) else None,
-            )
-        else:
-            metadata = metadatas[idx] if idx < len(metadatas) and isinstance(metadatas[idx], dict) else {}
-            document = documents[idx] if idx < len(documents) else ""
-            event = {
-                "id": doc_id,
-                "type": _infer_event_type(doc_id, metadata),
-                "source": metadata.get("source", ""),
-                "collection": getattr(vault, "name", "clipboard"),
-                "timestamp": "",
-                "last_accessed": "",
-                "text": document,
-                "metadata": metadata,
-            }
+        if doc_id in hydrated:
+            event = hydrated[doc_id]
             if idx < len(scores):
                 event["score"] = float(scores[idx])
-        events.append(event)
+            events.append(event)
     return events
 
 
-def add_event(
-    vault: Any,
-    event_type: str,
-    text: str,
-    metadata: dict[str, Any] | None = None,
-    doc_id: str | None = None,
-) -> str:
-    event_type = event_type.lower()
-    if event_type not in EVENT_TYPES:
+def add_event(vault: Any, event_type: str, text: str, *, source: str | None = None,
+              timestamp: datetime | str | int | float | None = None,
+              project: str | None = None, metadata: dict[str, Any] | None = None,
+              doc_id: str | None = None) -> str:
+    if not isinstance(event_type, str) or event_type.lower() not in EVENT_TYPES:
         raise ValueError(f"event_type must be one of {', '.join(sorted(EVENT_TYPES))}")
-    metadata = dict(metadata or {})
-    metadata.setdefault("event_type", event_type)
-    metadata.setdefault("source", event_type)
-    metadata.setdefault("captured_at", datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"))
-    if not doc_id:
-        prefix = EVENT_PREFIXES[event_type]
-        doc_id = f"{prefix}_{int(time.time() * 1000)}"
-    vault.add(documents=[text], ids=[doc_id], metadatas=[metadata])
+    event_type = event_type.lower()
+    source = _label(source or event_type, "source")
+    project = _label(project, "project", nullable=True)
+    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+        raise ValueError(f"event text must be at most {MAX_TEXT_BYTES} UTF-8 bytes")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise TypeError("metadata must be an object")
+    user_meta = dict(metadata or {})
+    for name, value in (("event_type", event_type), ("source", source), ("project", project)):
+        if name in user_meta and user_meta[name] != value:
+            raise ValueError(f"metadata {name} conflicts with the event argument")
+    if timestamp is None and "timestamp" in user_meta:
+        timestamp = user_meta["timestamp"]
+    occurred_at = _utc(timestamp, legacy=isinstance(timestamp, (int, float))) if timestamp is not None else None
+    if doc_id is not None:
+        _label(doc_id, "event ID")
+        existing = get_events(vault, [doc_id])
+        if existing:
+            event = existing[0]
+            generated = {"event_type", "source", "project", "timestamp", "captured_at", "timestamp_inferred"}
+            comparable = {key: value for key, value in event["metadata"].items() if key not in generated}
+            supplied = {key: value for key, value in user_meta.items() if key not in generated}
+            if (event["text"], event["type"], event["source"], event["project"], comparable) != (
+                    text, event_type, source, project, supplied) or (
+                    occurred_at is not None and occurred_at != event["timestamp"]):
+                raise ValueError("event ID already exists with different content")
+            return doc_id
+    else:
+        doc_id = f"{EVENT_PREFIXES[event_type]}_{uuid.uuid4()}"
+    captured_at = _utc(datetime.now(timezone.utc))
+    user_meta.update({"event_type": event_type, "source": source, "project": project,
+                      "timestamp": occurred_at or captured_at, "captured_at": captured_at,
+                      "timestamp_inferred": occurred_at is None})
+    try:
+        encoded = json.dumps(user_meta, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("event metadata must be JSON serializable") from exc
+    if len(encoded) > MAX_METADATA_BYTES:
+        raise ValueError(f"event metadata must be at most {MAX_METADATA_BYTES} UTF-8 bytes")
+    vault.add(documents=[text], ids=[doc_id], metadatas=[user_meta])
     return doc_id
 
 
-def forget_events(vault: Any, ids: Iterable[str]) -> int:
-    ids = [doc_id for doc_id in ids if doc_id]
-    if not ids:
-        return 0
-    return int(vault.delete(ids))
+def assign_project(vault: Any, ids: Iterable[str], project: str | None) -> int:
+    project = _label(project, "project", nullable=True)
+    events = get_events(vault, ids)
+    changed = 0
+    for event in events:
+        if event["project"] != project and vault.update_metadata(event["id"], {"project": project}):
+            changed += 1
+    return changed
+
+
+def forget_events(vault: Any, ids: Iterable[str]) -> dict[str, Any]:
+    chosen = list(dict.fromkeys(ids))
+    if len(chosen) > MAX_IDS or any(not isinstance(value, str) or not value for value in chosen):
+        raise ValueError(f"forget_events accepts at most {MAX_IDS} nonempty IDs")
+    before = {event["id"] for event in get_events(vault, chosen)}
+    errors: list[str] = []
+    try:
+        vault.delete(chosen)
+    except Exception as exc:
+        errors.append(f"Derived index cleanup failed: {type(exc).__name__}: {exc}")
+    remaining = {event["id"] for event in get_events(vault, chosen)}
+    if remaining:
+        errors.append("Canonical records remain after deletion")
+    return {"canonical_deleted": len(before - remaining),
+            "derived_invalidated": not errors, "cleanup_errors": errors}
 
 
 def open_target(event: dict[str, Any]) -> str | None:
@@ -245,18 +318,12 @@ def summarize_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     for event in events:
         key = str(event.get("type") or "event")
         counts[key] = counts.get(key, 0) + 1
-    return {
-        "count": len(events),
-        "types": counts,
-        "newest": events[0].get("timestamp") if events else None,
-        "oldest": events[-1].get("timestamp") if events else None,
-    }
+    return {"count": len(events), "types": counts,
+            "newest": events[0].get("timestamp") if events else None,
+            "oldest": events[-1].get("timestamp") if events else None}
 
 
 def current_context(vault: Any, limit: int = 20) -> dict[str, Any]:
-    events = fetch_events(vault, limit=limit)
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "summary": summarize_events(events),
-        "events": events,
-    }
+    events = fetch_events(vault, limit=limit)["events"]
+    return {"generated_at": _utc(datetime.now(timezone.utc)),
+            "summary": summarize_events(events), "events": events}

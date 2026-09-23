@@ -216,6 +216,7 @@ class VectorStore:
 
         self._init_db()
         self._load_from_db()
+        self._observed_revision = self.revision()
 
     def _get_drosophila_hasher(self, dim: int):
         if not hasattr(self, "_drosophila_hasher") or self._drosophila_hasher is None:
@@ -1505,6 +1506,47 @@ class VectorStore:
             conn.execute('CREATE INDEX IF NOT EXISTS idx_collection ON vectors(collection)')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_doc_id ON vectors(doc_id)')
             conn.execute('''
+                CREATE TABLE IF NOT EXISTS collection_revision (
+                    name TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS deleted_ids (
+                    collection TEXT NOT NULL, doc_id TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (collection, doc_id)
+                )
+            ''')
+            conn.execute('''
+                CREATE TRIGGER IF NOT EXISTS vectors_reject_deleted_id
+                BEFORE INSERT ON vectors
+                WHEN EXISTS (SELECT 1 FROM deleted_ids
+                             WHERE collection = NEW.collection AND doc_id = NEW.doc_id)
+                BEGIN SELECT RAISE(ABORT, 'document ID was deleted'); END
+            ''')
+            for name, operation, reference in (
+                ("insert", "INSERT", "NEW"),
+                ("update", "UPDATE OF document, vector_blob, metadata_json, created_at", "NEW"),
+                ("delete", "DELETE", "OLD"),
+            ):
+                conn.execute(f'''
+                    CREATE TRIGGER IF NOT EXISTS vectors_revision_{name}
+                    AFTER {operation} ON vectors
+                    BEGIN
+                        INSERT INTO collection_revision (name, revision)
+                        VALUES ({reference}.collection, 1)
+                        ON CONFLICT(name) DO UPDATE SET revision = revision + 1;
+                    END
+                ''')
+            conn.execute('''
+                CREATE TRIGGER IF NOT EXISTS vectors_remember_deleted_id
+                AFTER DELETE ON vectors
+                BEGIN
+                    INSERT OR IGNORE INTO deleted_ids (collection, doc_id)
+                    VALUES (OLD.collection, OLD.doc_id);
+                END
+            ''')
+            conn.execute('''
                 CREATE TABLE IF NOT EXISTS collection_meta (
                     name TEXT PRIMARY KEY,
                     embedding_dim INTEGER,
@@ -1546,6 +1588,75 @@ class VectorStore:
             except sqlite3.OperationalError:
                 pass  # Column already exists
             conn.commit()
+
+    def revision(self) -> int:
+        """Current committed row revision for this collection."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT revision FROM collection_revision WHERE name = ?", (self.collection,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def get_records(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Read canonical rows by ID, preserving input order and omitting missing IDs."""
+        if len(ids) > 500:
+            raise ValueError("get_records accepts at most 500 IDs")
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT doc_id, document, metadata_json, collection, created_at, last_accessed "
+                f"FROM vectors WHERE collection = ? AND doc_id IN ({marks})",
+                [self.collection, *ids],
+            ).fetchall()
+        found = {row[0]: dict(zip(
+            ("doc_id", "document", "metadata_json", "collection", "created_at", "last_accessed"), row
+        )) for row in rows}
+        return [found[doc_id] for doc_id in ids if doc_id in found]
+
+    def scan_records(self, *, after_row_id: int = 0, limit: int = 500) -> tuple[List[Dict[str, Any]], int | None]:
+        """Page canonical rows in stable insertion order. Caller rechecks scope."""
+        if not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("scan_records limit must be between 1 and 500")
+        if not isinstance(after_row_id, int) or after_row_id < 0:
+            raise ValueError("after_row_id must be a nonnegative integer")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, doc_id, document, metadata_json, collection, created_at, last_accessed "
+                "FROM vectors WHERE collection = ? AND id > ? ORDER BY id LIMIT ?",
+                (self.collection, after_row_id, limit),
+            ).fetchall()
+        records = [dict(zip(
+            ("row_id", "doc_id", "document", "metadata_json", "collection", "created_at", "last_accessed"), row
+        )) for row in rows]
+        return records, (int(rows[-1][0]) if len(rows) == limit else None)
+
+    def list_deleted_ids(self, *, after_id: str = "", limit: int = 500) -> tuple[List[str], str | None]:
+        if not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("list_deleted_ids limit must be between 1 and 500")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT doc_id FROM deleted_ids WHERE collection = ? AND doc_id > ? "
+                "ORDER BY doc_id LIMIT ?", (self.collection, after_id, limit)
+            ).fetchall()
+        ids = [row[0] for row in rows]
+        return ids, (ids[-1] if len(ids) == limit else None)
+
+    def reject_deleted_ids(self, ids: List[str]) -> None:
+        """Fail before changing sidecars when a caller retries a forgotten ID."""
+        for start in range(0, len(ids), 500):
+            batch = ids[start:start + 500]
+            if not batch:
+                continue
+            marks = ",".join("?" for _ in batch)
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"SELECT doc_id FROM deleted_ids WHERE collection = ? AND doc_id IN ({marks}) LIMIT 1",
+                    [self.collection, *batch],
+                ).fetchone()
+            if row:
+                raise ValueError(f"Document ID {row[0]} was deleted; use a new ID for a new capture")
 
     def claim_embedding_model(self, model: str, dim: int) -> None:
         """Prevent a collection from mixing vectors from different models."""
@@ -1677,7 +1788,7 @@ class VectorStore:
 
     # ── Load ───────────────────────────────────────────────────────────────
 
-    def _load_from_db(self):
+    def _load_from_db(self, *, force_rebuild: bool = False):
         """Load all vectors for this collection into memory."""
         with self._connect() as conn:
             cursor = conn.cursor()
@@ -1698,6 +1809,10 @@ class VectorStore:
                 self._doc_id_set.add(doc_id)
 
         N = len(self._doc_ids)
+        if force_rebuild and N == 0 and self._memmap is not None:
+            with self._lock_file(shared=False):
+                self._memmap[:] = 0
+                self._memmap.flush()
         if N > 0:
             first_vec = self._blob_to_vector(rows[0][1])
             dim = first_vec.view(-1).shape[0]
@@ -1711,7 +1826,7 @@ class VectorStore:
             row_bytes = dim * bytes_per_elem
             
             need_recreate = True
-            if os.path.exists(filepath):
+            if os.path.exists(filepath) and not force_rebuild:
                 try:
                     actual_size = os.path.getsize(filepath)
                     if row_bytes > 0 and actual_size > 0 and actual_size % row_bytes == 0:
@@ -1772,12 +1887,27 @@ class VectorStore:
         logger.debug("Loaded %d vectors for collection '%s' (FAISS: %s)",
                       len(self._doc_ids), self.collection, self._use_faiss)
 
+    def _refresh_if_changed(self):
+        """Refresh process-local vector IDs and sidecars after another writer commits."""
+        current = self.revision()
+        if current == getattr(self, "_observed_revision", current):
+            return
+        self._faiss_index = None
+        self._use_faiss = False
+        self._invalidate_streaming_exact_norms(remove_sidecar=True)
+        if self._native_hnsw_enabled:
+            self._invalidate_hnswlib_index(remove_sidecar=True)
+        self._load_from_db(force_rebuild=True)
+        self._observed_revision = self.revision()
+
 
     # ── Insert ─────────────────────────────────────────────────────────────
 
     def insert(self, doc_id: str, vector: torch.Tensor,
                document: str = "", metadata: Optional[Dict[str, Any]] = None):
         """Insert a single document vector."""
+        self._refresh_if_changed()
+        self.reject_deleted_ids([doc_id])
         if torch.isnan(vector).any() or torch.isinf(vector).any():
             raise ValueError("Input vector contains NaN or Inf values.")
 
@@ -1854,6 +1984,8 @@ class VectorStore:
                 conn.commit()
         except sqlite3.IntegrityError:
             logger.debug("doc_id %s already exists in collection '%s'.", doc_id, self.collection)
+            self._load_from_db(force_rebuild=True)
+            self._observed_revision = self.revision()
             return
 
         if self.engine == "holographic":
@@ -1894,6 +2026,8 @@ class VectorStore:
                      documents: Optional[List[str]] = None,
                      metadatas: Optional[List[Dict[str, Any]]] = None):
         """Insert multiple document vectors in a single transaction."""
+        self._refresh_if_changed()
+        self.reject_deleted_ids(doc_ids)
         for vector in vectors:
             if torch.isnan(vector).any() or torch.isinf(vector).any():
                 raise ValueError("Input vector contains NaN or Inf values.")
@@ -2012,6 +2146,11 @@ class VectorStore:
                     conn.commit()
             except Exception as e:
                 logger.error("Batch insert failed: %s", e)
+                try:
+                    self._load_from_db(force_rebuild=True)
+                    self._observed_revision = self.revision()
+                except Exception:
+                    logger.exception("Could not rebuild sidecar after failed insert")
                 raise e
 
             if self.engine == "holographic":
@@ -2060,6 +2199,7 @@ class VectorStore:
         Search for nearest vectors by cosine similarity or Hamming distance.
         Optionally filter by metadata via `where` dict.
         """
+        self._refresh_if_changed()
         if n_results <= 0:
             raise ValueError("n_results must be strictly positive (greater than 0).")
         if torch.isnan(query_vector).any() or torch.isinf(query_vector).any():
@@ -3264,15 +3404,15 @@ class VectorStore:
             )
             conn.commit()
 
-        for doc_id in result.ids:
-            if doc_id in rows:
-                result.documents.append(rows[doc_id][0] or "")
-                try:
-                    result.metadatas.append(json.loads(rows[doc_id][1] or "{}"))
-                except json.JSONDecodeError:
-                    result.metadatas.append({})
-            else:
-                result.documents.append("")
+        valid = [(index, doc_id) for index, doc_id in enumerate(result.ids) if doc_id in rows]
+        result.ids = [doc_id for _, doc_id in valid]
+        result.scores = [result.scores[index] for index, _ in valid if index < len(result.scores)]
+        result.distances = [result.distances[index] for index, _ in valid if index < len(result.distances)]
+        for _, doc_id in valid:
+            result.documents.append(rows[doc_id][0] or "")
+            try:
+                result.metadatas.append(json.loads(rows[doc_id][1] or "{}"))
+            except json.JSONDecodeError:
                 result.metadatas.append({})
 
     def _filter_by_metadata(self, where: Dict[str, Any]) -> List[int]:
@@ -3299,6 +3439,7 @@ class VectorStore:
 
     def delete(self, doc_ids: List[str]) -> int:
         """Delete documents by ID. Returns count deleted."""
+        self._refresh_if_changed()
         to_delete = set(doc_ids) & self._doc_id_set
         if not to_delete:
             return 0
