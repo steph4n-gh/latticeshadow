@@ -162,6 +162,53 @@ def choose_capture_sources(clipboard=True, terminal_history=False):
     set_consent("clipboard", clipboard)
     set_consent("terminal_history", terminal_history)
 
+
+def test_terminal_history_pause_and_reenable_skip_disabled_commands(setup_test_env, tmp_path, monkeypatch):
+    """A running daemon must capture only commands from an enabled interval."""
+    shadowd = setup_test_env["shadowd"]
+    histfile = tmp_path / "synthetic_zsh_history"
+    histfile.write_text("git status --before-start\n", encoding="utf-8")
+    monkeypatch.setenv("HISTFILE", str(histfile))
+
+    def append(command):
+        with histfile.open("a", encoding="utf-8") as history:
+            history.write(command + "\n")
+
+    watcher, active, entries = shadowd._terminal_history_step(None, False, True)
+    assert active and entries == []
+    append("git commit --active-one")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert [entry["text"] for entry in entries] == ["git commit --active-one"]
+
+    append("git commit --paused-one")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, False)
+    assert not active and entries == []
+    append("git commit --paused-two")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, False)
+    assert not active and entries == []
+    append("git commit --before-resume-poll")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert active and entries == []
+    append("git commit --active-two")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert [entry["text"] for entry in entries] == ["git commit --active-two"]
+
+
+def test_terminal_history_can_enable_after_daemon_started_disabled(setup_test_env, tmp_path, monkeypatch):
+    shadowd = setup_test_env["shadowd"]
+    histfile = tmp_path / "synthetic_zsh_history"
+    histfile.write_text("git status --while-off\n", encoding="utf-8")
+    monkeypatch.setenv("HISTFILE", str(histfile))
+
+    watcher, active, entries = shadowd._terminal_history_step(None, False, False)
+    assert watcher is None and not active and entries == []
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert watcher is not None and active and entries == []
+    with histfile.open("a", encoding="utf-8") as history:
+        history.write("git status --after-enable\n")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert [entry["text"] for entry in entries] == ["git status --after-enable"]
+
 # --- CLI Command Lifecycle Tests ---
 
 def test_capture_requires_explicit_choices_before_enable(setup_test_env, monkeypatch):

@@ -32,11 +32,15 @@ class HistoryWatcher:
 
     def _initialize_offset(self):
         """Seek to the end of the history file to avoid replaying old history."""
-        if os.path.exists(self.histfile):
-            try:
-                self._offset = os.path.getsize(self.histfile)
-            except Exception:
-                self._offset = 0
+        self.skip_to_end()
+
+    def skip_to_end(self):
+        """Discard commands written before capture became active again."""
+        try:
+            with open(self.histfile, "rb") as history:
+                self._offset = os.fstat(history.fileno()).st_size
+        except FileNotFoundError:
+            self._offset = 0
         self._initialized = True
 
     def poll(self) -> list:
@@ -129,4 +133,3 @@ class HistoryWatcher:
 
 
 TerminalHistoryWatcher = HistoryWatcher
-

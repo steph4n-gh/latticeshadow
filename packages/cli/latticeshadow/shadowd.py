@@ -293,6 +293,24 @@ def capture_allowed(event_type: str, text: str) -> bool:
     )
 
 
+def _terminal_history_step(watcher, was_enabled: bool, enabled: bool):
+    """Poll only commands added during an uninterrupted enabled interval."""
+    if not enabled:
+        return watcher, False, []
+
+    if watcher is None:
+        from latticeshadow.history_watcher import TerminalHistoryWatcher
+        watcher = TerminalHistoryWatcher()
+        watcher.skip_to_end()
+        return watcher, True, []
+
+    if not was_enabled:
+        watcher.skip_to_end()
+        return watcher, True, []
+
+    return watcher, True, watcher.poll()
+
+
 def store_captured_event(vault, hot_vault, event_type: str, text: str, *,
                          timestamp=None, metadata: dict | None = None) -> str | None:
     """Commit canonical capture first, then best-effort mirror its normalized form."""
@@ -615,21 +633,10 @@ def run_daemon():
         except Exception as sde:
             logger.error("Failed to start app snapshotting: %s", sde)
 
-    # Setup history watcher if configured
+    # Terminal capture can be enabled during this daemon run. The watcher is
+    # created on that boundary and starts at EOF, so old commands stay excluded.
     history_watcher = None
-    from latticeshadow import config as cfg
-    # A persisted pause must not prevent the watcher from being ready to resume.
-    terminal_choice = consent.consent_status()["surfaces"]["terminal_history"]
-    if terminal_choice["enabled"] and not terminal_choice["needs_consent"]:
-        try:
-            try:
-                from latticeshadow.history_watcher import TerminalHistoryWatcher as HistoryWatcherClass
-            except ImportError:
-                from latticeshadow.history_watcher import HistoryWatcher as HistoryWatcherClass
-            history_watcher = HistoryWatcherClass()
-            logger.info("Terminal history capture active.")
-        except Exception as he:
-            logger.error("Failed to initialize Terminal history capture: %s", he)
+    terminal_enabled_last = False
 
     replay_startup_events()
     startup_stop.set()
@@ -770,45 +777,50 @@ def run_daemon():
                 except (UnicodeEncodeError, UnicodeDecodeError, UnicodeError, ValueError) as ue:
                     logger.warning("Ignored encoding error during pasteboard string retrieval: %s", ue)
 
-            # Poll terminal history
-            if history_watcher and consent.capture_enabled("terminal_history"):
-                try:
-                    new_cmds = history_watcher.poll()
-                    if new_cmds:
-                        for i, cmd in enumerate(new_cmds):
-                            cmd_text = cmd["text"]
-                            cmd_ts = cmd["timestamp"]
-                            if not capture_allowed("terminal", cmd_text):
-                                continue
-                            doc_id = store_captured_event(
-                                vault, hot_vault, "terminal", cmd_text,
-                                timestamp=cmd_ts,
-                            )
-                            if pot_chain:
-                                pot_chain.append_event("terminal", cmd_text)
-                            try:
-                                from latticeshadow.audit_log import append_audit_event
+            # Avoid touching history while disabled; on the next consented
+            # enable, seek to EOF before polling so old commands stay excluded.
+            try:
+                terminal_enabled = consent.capture_enabled("terminal_history")
+                history_watcher, terminal_enabled_last, new_cmds = _terminal_history_step(
+                    history_watcher, terminal_enabled_last, terminal_enabled)
+                if new_cmds:
+                    for cmd in new_cmds:
+                        cmd_text = cmd["text"]
+                        cmd_ts = cmd["timestamp"]
+                        if not consent.capture_enabled("terminal_history"):
+                            break
+                        if not capture_allowed("terminal", cmd_text):
+                            continue
+                        doc_id = store_captured_event(
+                            vault, hot_vault, "terminal", cmd_text,
+                            timestamp=cmd_ts,
+                        )
+                        if pot_chain:
+                            pot_chain.append_event("terminal", cmd_text)
+                        try:
+                            from latticeshadow.audit_log import append_audit_event
 
-                                append_audit_event(
-                                    "capture",
-                                    {
-                                        "source": "terminal",
-                                        "doc_id": doc_id,
-                                        "content_hash": hashlib.sha256(
-                                            cmd_text.encode("utf-8", errors="replace")
-                                        ).hexdigest(),
-                                    },
-                                    data_dir=get_log_dir(),
-                                )
-                            except Exception:
-                                pass
-                            inserts_since_consolidation += 1
-                            logger.info("Captured command: %s (total_new: %d)", doc_id, inserts_since_consolidation)
-                        
-                        # Run Topological Loop Detection and speculative fix generation
-                        handle_loop_and_speculative_fix(vault, logger, p2p_node)
-                except Exception as he:
-                    logger.warning("Error polling terminal history: %s", he)
+                            append_audit_event(
+                                "capture",
+                                {
+                                    "source": "terminal",
+                                    "doc_id": doc_id,
+                                    "content_hash": hashlib.sha256(
+                                        cmd_text.encode("utf-8", errors="replace")
+                                    ).hexdigest(),
+                                },
+                                data_dir=get_log_dir(),
+                            )
+                        except Exception:
+                            pass
+                        inserts_since_consolidation += 1
+                        logger.info("Captured command: %s (total_new: %d)", doc_id, inserts_since_consolidation)
+
+                    # Run Topological Loop Detection and speculative fix generation
+                    handle_loop_and_speculative_fix(vault, logger, p2p_node)
+            except Exception as he:
+                terminal_enabled_last = False
+                logger.warning("Error polling terminal history: %s", he)
 
             try:
                 sync_event = sync_queue.get(timeout=POLL_INTERVAL)
