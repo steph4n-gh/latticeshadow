@@ -444,6 +444,8 @@ def test_cli_status(setup_test_env, mock_subprocess_run, capsys):
     
     # Mock launchctl to return stopped status
     mock_res = MagicMock()
+    mock_res.returncode = 0
+    mock_res.stderr = ""
     mock_res.stdout = "other.job.label\n"
     mock_subprocess_run.return_value = mock_res
     
@@ -482,6 +484,81 @@ def test_cli_status(setup_test_env, mock_subprocess_run, capsys):
     assert "RUNNING" in out
     assert str(setup_test_env["db_path"]) in out
     assert "Entries:  1" in out
+
+
+def test_capture_pause_persists_without_changing_source_choices(setup_test_env):
+    from latticeshadow import config, consent
+
+    cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    assert consent.capture_enabled("clipboard") is True
+
+    run_cli(cli, ["pause"])
+    assert config.get("inputs.paused") is True
+    assert config.get("inputs.clipboard") is True
+    assert consent.capture_enabled("clipboard") is False
+    assert consent.consent_status()["surfaces"]["clipboard"]["needs_consent"] is False
+
+    # Simulate a new process reading the config after restart.
+    import importlib
+    importlib.reload(config)
+    assert consent.consent_status()["paused"] is True
+    assert consent.capture_enabled("clipboard") is False
+
+    run_cli(cli, ["resume"])
+    assert config.get("inputs.paused") is False
+    assert consent.capture_enabled("clipboard") is True
+
+
+def test_resume_requires_recorded_source_choices(setup_test_env):
+    from latticeshadow import config, consent
+
+    cli = setup_test_env["shadow_cli"]
+    run_cli(cli, ["pause"])
+    with pytest.raises(SystemExit, match="Choose capture sources"):
+        run_cli(cli, ["resume"])
+    assert config.get("inputs.paused") is True
+    assert consent.capture_enabled("clipboard") is False
+
+
+def test_interrupted_config_write_preserves_capture_choices(setup_test_env, monkeypatch):
+    from latticeshadow import config, consent
+
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    original = (setup_test_env["log_dir"] / "config.toml").read_bytes()
+
+    def fail_replace(_source, _destination):
+        raise OSError("simulated power loss before replacement")
+
+    monkeypatch.setattr(config.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated power loss"):
+        consent.set_paused(True)
+
+    assert (setup_test_env["log_dir"] / "config.toml").read_bytes() == original
+    assert consent.capture_enabled("clipboard") is True
+    assert not list(setup_test_env["log_dir"].glob(".config-*.tmp"))
+
+
+def test_capture_status_uses_real_daemon_and_pause_state(setup_test_env, mock_subprocess_run):
+    from latticeshadow import consent
+    from latticeshadow.capture_state import get_status
+
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    mock_subprocess_run.return_value.stdout = "321 0 com.latticedb.shadow\n"
+    status = get_status()
+    assert status["state"] == "capturing"
+    assert status["sources"]["clipboard"]["capturing"] is True
+
+    consent.set_paused(True)
+    status = get_status()
+    assert status["state"] == "paused"
+    assert status["sources"]["clipboard"]["capturing"] is False
+
+    mock_subprocess_run.return_value.returncode = 1
+    mock_subprocess_run.return_value.stderr = "launchctl unavailable"
+    status = get_status()
+    assert status["daemon_running"] is None
+    assert status["state"] == "unavailable"
 
 def test_cli_search_paste(setup_test_env, capsys, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]

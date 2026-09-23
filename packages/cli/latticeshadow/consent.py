@@ -89,6 +89,7 @@ def consent_status() -> dict[str, Any]:
     return {
         "completed": bool(consent_cfg.get("completed")),
         "version": int(consent_cfg.get("version", 1)),
+        "paused": bool(cfg.get("inputs", {}).get("paused", False)),
         "surfaces": surfaces,
     }
 
@@ -101,8 +102,23 @@ def pending_capture_sources() -> list[str]:
 def capture_enabled(name: str) -> bool:
     if name not in CAPTURE_SOURCES:
         raise ValueError(f"Unknown capture source: {name}")
-    state = consent_status()["surfaces"][name]
-    return state["enabled"] and not state["needs_consent"]
+    status = consent_status()
+    state = status["surfaces"][name]
+    return state["enabled"] and not state["needs_consent"] and not status["paused"]
+
+
+def set_paused(paused: bool) -> dict[str, Any]:
+    """Persist the capture pause without changing source choices or consent."""
+    if not isinstance(paused, bool):
+        raise TypeError("paused must be a bool")
+    if not paused:
+        pending = pending_capture_sources()
+        if pending:
+            raise ValueError("Choose capture sources before resuming: " + ", ".join(pending))
+    cfg = config.load_config()
+    cfg.setdefault("inputs", {})["paused"] = paused
+    config.save_config(cfg)
+    return consent_status()
 
 
 def set_consent(surface: str, enabled: bool) -> dict[str, Any]:

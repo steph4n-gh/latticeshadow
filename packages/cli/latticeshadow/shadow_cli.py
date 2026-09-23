@@ -662,25 +662,25 @@ def do_remove():
 
 
 def do_status():
-    from latticeshadow import consent
+    from latticeshadow.capture_state import get_status
 
-    # Check if daemon is running via launchctl
-    res = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
-    is_running = False
-    for line in res.stdout.splitlines():
-        if PLIST_LABEL in line:
-            parts = line.split()
-            if len(parts) >= 3:
-                is_running = parts[0] != "-"
-            else:
-                is_running = True
-            break
-
-    if is_running:
+    status = get_status()
+    if status["daemon_running"] is True:
         print("Daemon:   \033[92m● RUNNING\033[0m")
-    else:
+    elif status["daemon_running"] is False:
         print("Daemon:   \033[91m● STOPPED\033[0m")
-    pending = consent.pending_capture_sources()
+    else:
+        print("Daemon:   ● UNKNOWN")
+    if status["paused"]:
+        print("Capture:  PAUSED (run 'shadow resume' to resume selected sources)")
+    elif status["state"] == "capturing":
+        active = ", ".join(name for name, item in status["sources"].items() if item["capturing"])
+        print(f"Capture:  {active}")
+    elif status["state"] == "idle":
+        print("Capture:  No sources enabled")
+    if status["error"]:
+        print(f"Status:   {status['error']}")
+    pending = status["consent_needed"]
     if pending:
         print(f"Capture choices needed: {', '.join(pending)} (run 'shadow consent wizard')")
 
@@ -706,6 +706,23 @@ def do_status():
     log_path = os.path.join(get_log_dir(), "shadowd.log")
     if os.path.exists(log_path):
         print(f"Log:      {log_path}")
+
+
+def do_pause():
+    from latticeshadow.consent import set_paused
+
+    set_paused(True)
+    print("Capture paused. Your source choices are preserved.")
+
+
+def do_resume():
+    from latticeshadow.consent import set_paused
+
+    try:
+        set_paused(False)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print("Capture resumed for enabled sources.")
 
 
 # ── Memory Timeline Commands ─────────────────────────────────────────────────
@@ -2107,6 +2124,8 @@ def main():
   paste  <query>  Search and copy the #1 result back to clipboard
   watch           Live stream of clipboard captures (Ctrl+C to stop)
   status          Check daemon and database status
+  pause           Pause capture without changing source choices
+  resume          Resume chosen capture sources
   now             Show current private memory context
   timeline        Show a recent or searched memory timeline
   remember        Add a normalized memory event
@@ -2153,6 +2172,8 @@ def main():
 
     subparsers.add_parser("watch", help="Live stream of clipboard captures")
     subparsers.add_parser("status", help="Check daemon and database status")
+    subparsers.add_parser("pause", help="Persistently pause all capture sources")
+    subparsers.add_parser("resume", help="Resume chosen capture sources after consent")
 
     now_p = subparsers.add_parser("now", help="Show current private memory context")
     now_p.add_argument("--limit", type=int, default=20, help="Number of recent events to show")
@@ -2347,6 +2368,8 @@ def main():
         "compose": do_compose,
         "watch": do_watch,
         "status": do_status,
+        "pause": do_pause,
+        "resume": do_resume,
         "now": lambda: do_now(args),
         "timeline": lambda: do_timeline(args),
         "remember": lambda: do_remember(args),

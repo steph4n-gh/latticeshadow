@@ -9,6 +9,8 @@ Writes TOML manually (no tomli-w dependency needed for flat configs).
 import os
 import sys
 import copy
+import json
+import tempfile
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -41,6 +43,7 @@ DEFAULTS = {
         "clipboard": False,
         "terminal_history": False,
         "ambient_context": False,
+        "paused": False,
     },
     "sync": {
         "icloud_sync": False,
@@ -133,16 +136,30 @@ def get_data_dir() -> str:
 
 
 def save_config(config: dict) -> None:
-    """Write config dict to ~/.latticeshadow/config.toml."""
+    """Atomically write config so a crash cannot truncate capture choices."""
     os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
     lines = []
     _write_toml(config, lines, depth=0)
-    with open(CONFIG_PATH, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    payload = "\n".join(lines) + "\n"
+    fd, temporary = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=LOG_DIR)
     try:
-        os.chmod(CONFIG_PATH, 0o600)
-    except Exception:
-        pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, CONFIG_PATH)
+        try:
+            directory_fd = os.open(LOG_DIR, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _write_toml(data: dict, lines: list, depth: int, prefix: str = "") -> None:
@@ -171,9 +188,11 @@ def _toml_value(value) -> str:
     elif isinstance(value, float):
         return str(value)
     elif isinstance(value, str):
-        return f'"{value}"'
+        return json.dumps(value, ensure_ascii=False)
+    elif isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     else:
-        return f'"{value}"'
+        raise TypeError(f"Unsupported TOML value: {type(value).__name__}")
 
 
 def get(key: str) -> str | int | bool | None:

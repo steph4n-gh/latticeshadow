@@ -539,7 +539,9 @@ def run_daemon():
     # Setup history watcher if configured
     history_watcher = None
     from latticeshadow import config as cfg
-    if consent.capture_enabled("terminal_history"):
+    # A persisted pause must not prevent the watcher from being ready to resume.
+    terminal_choice = consent.consent_status()["surfaces"]["terminal_history"]
+    if terminal_choice["enabled"] and not terminal_choice["needs_consent"]:
         try:
             try:
                 from latticeshadow.history_watcher import TerminalHistoryWatcher as HistoryWatcherClass
