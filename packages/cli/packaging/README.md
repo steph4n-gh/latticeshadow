@@ -64,8 +64,9 @@ useful independence evidence, with precise provenance: the guest began as a CI
 image, and its Gatekeeper assessments were disabled. The first offline `remember`
 on that pre-integration app exposed a model-path bug; the memory-core fix needs
 a rebuilt integrated artifact. Headless `screencapture` could not capture a
-display. Full offline save/search, a visible UI journey, upgrade/removal, stock
-Gatekeeper and final signed-artifact checks remain pending.
+display. At that stage, full offline save/search, a visible UI journey,
+upgrade/removal, stock Gatekeeper and final signed-artifact checks remained
+pending.
 
 ## Integrated 0.2.0 candidate lab result
 
