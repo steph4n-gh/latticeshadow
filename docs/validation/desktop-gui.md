@@ -1,5 +1,30 @@
 # Desktop recall GUI validation
 
+## Final packaged app in a disposable Mac VM
+
+The unsigned Apple Silicon app in `LatticeShadow-b603442-arm64.zip` was
+installed and exercised in a logged-in disposable macOS VM. The ZIP SHA-256
+was `6bcf2edec4a128323bfb425885ca445efbd9208346bd22bd1aa352df1d70e35e`.
+Its bundled CLI created one synthetic note and one synthetic local file event
+in a new vault with a Keychain-wrapped master key. Clipboard sharing with the
+VM host was disabled. Capture choices were not completed and no daemon was
+started; the menu and panel reported **Capture needs consent**.
+
+| Journey | Observed result |
+| --- | --- |
+| Menu, recent, search | The menu opened Recall. Both events appeared in recent results and in a `queue` search. The dark panel displayed readable results, actions, and preview. |
+| Filters and preview | Source `file` returned only the file. Assigning the note to a new project updated its row and preview; filtering by that project returned only the note. Preview showed text, source, project, times, target where present, and event reference. |
+| Copy and open | **Copy** put exactly the selected synthetic note text on the guest pasteboard. **Open link/file** for the synthetic file opened Finder with that file selected. |
+| Forget | **Forget…** warned that backups and the original source might still contain the event. After confirming deletion of the disposable note, live results contained only the file. Filtering by the former note project showed **No matches** and an empty preview. |
+| Rapid search | Quickly entering a no-result query followed by `queue` ended on the latest query's file result. Rows and preview cleared while searching. This visual sequence does not prove every out-of-order completion race. |
+| Pause and resume | **Pause capture** changed to **Resume capture**. Resume showed a consent-required alert and kept capture paused because sources had not been chosen. |
+
+With Finder in front, Option-Space sent through Screen Sharing triggered Finder
+Quick Look rather than Recall. This is inconclusive for the global shortcut:
+remote modifier forwarding was not established. A local cross-app keyboard
+check is still needed. No sanitized panel-only screenshot file was retained;
+the remote view included guest desktop and file paths outside the product UI.
+
 ## Styled panel on a logged-in local macOS session
 
 The integrated styled AppKit panel was exercised from source containing
