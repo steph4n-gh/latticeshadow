@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- markdown-sha256: a0c12ca8dcbfcc0ff4e92abdafa7573b32b937a3dfe1bf0ddf0259780c8cc5b5 -->
+<!-- markdown-sha256: aa9aa27344d22e7ada168d732d81b39d0aac91bda581c294fe634dc71cfa0871 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -310,7 +310,9 @@
       to <code>HISTFILE</code> (often <code>~/.zsh_history</code>). It
       does not promise a complete record of earlier commands. Clipboard
       capture reads copied text when enabled; it is not a universal
-      secret filter. Neither source needs to be enabled for manual
+      secret filter. It takes a baseline at startup or after resuming:
+      text already on the clipboard is not a new capture, while later
+      changes may be. Neither source needs to be enabled for manual
       memory.</p>
       <p>Pause keeps source choices and persists across a restart;
       disable stops the service across logins:</p>

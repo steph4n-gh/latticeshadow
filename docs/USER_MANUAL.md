@@ -225,7 +225,9 @@ Capture is prospective. The terminal watcher starts at the current end of the
 history file and depends on your shell writing to `HISTFILE` (often
 `~/.zsh_history`). It does not promise a complete record of earlier commands.
 Clipboard capture reads copied text when enabled; it is not a universal secret
-filter. Neither source needs to be enabled for manual memory.
+filter. It takes a baseline at startup or after resuming: text already on the
+clipboard is not a new capture, while later changes may be. Neither source
+needs to be enabled for manual memory.
 
 Pause keeps source choices and persists across a restart; disable stops the
 service across logins:
