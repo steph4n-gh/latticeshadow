@@ -125,7 +125,7 @@ and notarization are still pending. See the
 [exact-artifact validation report](../../../docs/validation/packaged-app-2026-09-23.md)
 for the observations, including the abrupt Tart-stop pause discrepancy.
 
-## Packaged regression candidate
+## Earlier packaged regression candidate
 
 The later candidate from source commit
 `7ccc29c1c62828e5c3a0f41bdb2a9d9ff89eb776` produced a 425,566,640-byte
@@ -150,3 +150,33 @@ although the first-use JSON output was clean. The full packaged performance and
 backup repeat is in progress separately. Developer ID signing, notarization,
 stock Gatekeeper behavior, interactive Keychain approval, and the final styled
 GUI journey remain outside this packaged regression check.
+
+## Current packaged validation candidate
+
+The app rebuilt from source commit
+`b603442dfb471cf22f9a561f1b034a6582f830d9` produced a 425,567,521-byte
+ZIP with SHA-256
+`6bcf2edec4a128323bfb425885ca445efbd9208346bd22bd1aa352df1d70e35e`.
+The exact checksum matched in the build and stripped install guests.
+`verify_app.py` passed for version 0.2.0, arm64 launcher, offline bundled-model
+and native-resource smoke, ad-hoc signature, and 307 Mach-O dependency links.
+
+In a dedicated disposable guest with only synthetic data, both a missing vault
+and an existing vault opened with a wrong key made `timeline --json` exit
+nonzero with **zero stdout bytes**; guidance appeared on stderr. The same
+guest's vault was actually crypto-shredded. Its synthetic Keychain entry was
+successfully removed, and the CLI accurately reported that result. The branch
+where Keychain deletion fails was covered by a focused unit test, but could
+not be induced in that guest without changing the tested artifact or OS state.
+
+In a separate fresh stripped target, a wrong-passphrase restore of the retained
+synthetic backup exited promptly, created no destination, and showed no py2app
+launch error. Correct restore, inspection, and activation reopened two retained
+events and one deletion tombstone; the first `timeline --json` output parsed
+cleanly with both retained IDs. The guest did not create a software Keychain
+keypair, so this run did not trigger a key-migration notice. The full packaged
+performance and backup repeat is being run separately on this exact archive.
+
+Interactive Keychain approval, successful legacy 0.1.0 vault decryption, final
+styled GUI inspection, stock Gatekeeper first launch, Developer ID signing,
+and notarization remain open checks before a public binary release.
