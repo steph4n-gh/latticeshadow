@@ -23,6 +23,7 @@ import plistlib
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import deque
+from importlib.metadata import PackageNotFoundError, version
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -664,12 +665,38 @@ def _commit() -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def _report(profile: str, detail: dict, elapsed: float, started_utc: str) -> dict:
+def _dependencies() -> dict[str, str | None]:
+    names = ("latticeshadow-cli", "latticeshadow-db", "torch", "numpy",
+             "sentence-transformers", "cryptography")
+    result = {}
+    for name in names:
+        try:
+            result[name] = version(name)
+        except PackageNotFoundError:
+            result[name] = None
+    return result
+
+
+def _hardware() -> dict:
+    import psutil
+    details = {"machine": platform.machine(), "cpu": platform.processor(),
+               "ram_gib": round(psutil.virtual_memory().total / (1024 ** 3), 1)}
+    if platform.system() == "Darwin":
+        model = subprocess.run(["/usr/sbin/sysctl", "-n", "hw.model"],
+                               capture_output=True, text=True)
+        details["model"] = model.stdout.strip() if model.returncode == 0 else None
+    return details
+
+
+def _report(profile: str, detail: dict, elapsed: float, started_utc: str,
+            commit: str | None, script_sha256: str) -> dict:
     return {"profile": profile, "status": detail.get("status", "passed"),
-            "commit": _commit(), "started_utc": started_utc,
+            "commit": commit, "validation_script_sha256": script_sha256,
+            "started_utc": started_utc,
             "elapsed_seconds": round(elapsed, 2), "system": platform.system(),
-            "os_release": platform.release(), "machine": platform.machine(),
-            "python": platform.python_version(), "cpu": platform.processor(), "detail": detail}
+            "os_release": platform.release(), "macos_version": platform.mac_ver()[0] or None,
+            "python": platform.python_version(), "hardware": _hardware(),
+            "dependencies": _dependencies(), "detail": detail}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -725,6 +752,8 @@ def main(argv: list[str] | None = None) -> int:
         if any(directory.iterdir()):
             parser.error("--data-dir must be empty")
     started_utc = datetime.now(timezone.utc).isoformat()
+    commit = _commit()
+    script_sha256 = _sha256(Path(__file__))
     start = time.perf_counter()
     try:
         if args.profile == "lifecycle":
@@ -740,7 +769,10 @@ def main(argv: list[str] | None = None) -> int:
             detail = soak(directory, seconds=args.seconds, interval=args.sample_interval,
                           operation_interval=args.operation_interval,
                           max_live=args.max_live_events, progress=progress)
-        report = _report(args.profile, detail, time.perf_counter() - start, started_utc)
+        if _commit() != commit or _sha256(Path(__file__)) != script_sha256:
+            raise RuntimeError("Validation checkout or script changed during the run")
+        report = _report(args.profile, detail, time.perf_counter() - start,
+                         started_utc, commit, script_sha256)
         serialized = json.dumps(report, indent=2, sort_keys=True)
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)

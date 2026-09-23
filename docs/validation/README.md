@@ -37,7 +37,9 @@ repeats 75 authored scenario records into 10,000 events, then records model
 initialization, vault open, ingestion, first query with ephemeral-index build,
 warm embedding, ranker, and full scoped search latency separately. The report
 includes p50/p95, process RSS, descriptors, threads, children, disk size, model
-revision, operating system, machine, and Git SHA. A hub/cache model start may
+revision, hardware model/RAM, operating system, dependency versions, Git SHA,
+and validation-script SHA-256. The driver rejects a checkout or script that
+changes before the run finishes. A hub/cache model start may
 include a network download, which is **not separately timed**; a bundle run can
 identify its local model source. The small local test count is only a driver
 smoke; the product's 10,000-event target requires a quiet, exclusive reference
