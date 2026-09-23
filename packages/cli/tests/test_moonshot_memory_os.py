@@ -69,6 +69,13 @@ class FakeVault:
 
     def add(self, documents, ids, metadatas):
         self.added.append((documents, ids, metadatas))
+        with self._store._connect() as conn:
+            for document, doc_id, metadata in zip(documents, ids, metadatas):
+                conn.execute(
+                    "INSERT INTO vectors VALUES (?, ?, ?, ?, ?, ?)",
+                    (doc_id, document, json.dumps(metadata), self.name,
+                     "2026-07-01 10:02:00", "2026-07-01 10:02:00"),
+                )
         return ids
 
 
