@@ -129,13 +129,17 @@ def get_or_create_master_key() -> str:
             else:
                 # Fallback check for legacy plaintext key
                 if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                    wrapped = wrap_and_encode(stored)
-                    keychain.store_key(wrapped)
-                    key_file = get_key_file()
-                    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(wrapped)
-                    print("\u2713 Migrated legacy master key to a Keychain keypair-wrapped key.")
+                    try:
+                        wrapped = wrap_and_encode(stored)
+                        keychain.store_key(wrapped)
+                        key_file = get_key_file()
+                        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(wrapped)
+                        print("\u2713 Migrated legacy master key to a Keychain keypair-wrapped key.")
+                    except Exception:
+                        # Migration is optional when the valid legacy key is already available.
+                        pass
                     return stored
     except Exception:
         keychain_lookup_failed = True
@@ -154,15 +158,16 @@ def get_or_create_master_key() -> str:
                     pass
                 return unwrapped
             elif len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                wrapped = wrap_and_encode(stored)
                 try:
+                    wrapped = wrap_and_encode(stored)
                     keychain.store_key(wrapped)
+                    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as f:
+                        f.write(wrapped)
+                    print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 except Exception:
+                    # Keep using the intact legacy file if wrapping is unavailable.
                     pass
-                fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w") as f:
-                    f.write(wrapped)
-                print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 return stored
         raise PermissionError(
             "Existing master key could not be unlocked. The key file was left unchanged; "

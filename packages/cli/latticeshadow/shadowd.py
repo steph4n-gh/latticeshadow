@@ -55,6 +55,24 @@ MIN_CONTENT_CHARS = 3
 POLL_INTERVAL = 0.5  # seconds
 AUTO_CONSOLIDATE_THRESHOLD = 500  # trigger REM sleep every N new entries
 
+
+def _clipboard_change_count(pasteboard):
+    try:
+        return pasteboard.changeCount()
+    except Exception:
+        return None
+
+
+def _new_consented_clipboard_change(current_count, enabled, last_count, was_enabled):
+    """Read changes only after a count baseline exists inside the current consent period."""
+    if not enabled:
+        return False, current_count if current_count is not None else last_count, False
+    if current_count is None:
+        return False, last_count, False
+    if not was_enabled or last_count is None:
+        return False, current_count, True
+    return current_count != last_count, current_count, True
+
 # Pasteboard types that signal "do not record" (password managers, transient copies)
 CONCEALED_TYPES = [
     "org.nspasteboard.ConcealedType",   # Community standard (1Password, Bitwarden, KeePassXC)
@@ -132,13 +150,17 @@ def get_or_create_master_key() -> str:
             else:
                 # Fallback check for legacy plaintext key
                 if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                    wrapped = wrap_and_encode(stored)
-                    keychain.store_key(wrapped)
-                    key_file = get_key_file()
-                    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(wrapped)
-                    logger.info("Migrated legacy master key to a Keychain keypair-wrapped key.")
+                    try:
+                        wrapped = wrap_and_encode(stored)
+                        keychain.store_key(wrapped)
+                        key_file = get_key_file()
+                        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(wrapped)
+                        logger.info("Migrated legacy master key to a Keychain keypair-wrapped key.")
+                    except Exception:
+                        # The readable legacy key remains usable without migration.
+                        pass
                     return stored
     except Exception:
         keychain_lookup_failed = True
@@ -157,15 +179,16 @@ def get_or_create_master_key() -> str:
                     pass
                 return unwrapped
             elif len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                wrapped = wrap_and_encode(stored)
                 try:
+                    wrapped = wrap_and_encode(stored)
                     keychain.store_key(wrapped)
+                    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as f:
+                        f.write(wrapped)
+                    logger.info("Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 except Exception:
+                    # The readable legacy file remains usable without migration.
                     pass
-                fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w") as f:
-                    f.write(wrapped)
-                logger.info("Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 return stored
         raise PermissionError(
             "Existing master key could not be unlocked. The key file was left unchanged; "
@@ -417,20 +440,23 @@ def run_daemon():
             logger.warning("Integrity check skipped: %s", e)
 
     pasteboard = AppKit.NSPasteboard.generalPasteboard()
+    initial_change_count = _clipboard_change_count(pasteboard)
+    initially_enabled = consent.capture_enabled("clipboard") and initial_change_count is not None
     startup_events: list[str] = []
     startup_lock = threading.Lock()
     startup_stop = threading.Event()
 
     def watch_startup_clipboard():
-        last_startup_count = -1
+        last_startup_count = initial_change_count
+        was_enabled = initially_enabled
         while not startup_stop.is_set() and _running:
             try:
-                if not consent.capture_enabled("clipboard"):
-                    startup_stop.wait(POLL_INTERVAL)
-                    continue
-                current_count = pasteboard.changeCount() if hasattr(pasteboard, "changeCount") else 0
-                if current_count != last_startup_count:
-                    last_startup_count = current_count
+                current_count = _clipboard_change_count(pasteboard)
+                changed, last_startup_count, was_enabled = _new_consented_clipboard_change(
+                    current_count, consent.capture_enabled("clipboard"),
+                    last_startup_count, was_enabled,
+                )
+                if changed:
                     if pasteboard.availableTypeFromArray_(CONCEALED_TYPES) is None:
                         content = pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
                         if content:
@@ -657,10 +683,8 @@ def run_daemon():
     startup_thread.join(timeout=0.2)
     replay_startup_events()
 
-    try:
-        last_change_count = pasteboard.changeCount() if hasattr(pasteboard, "changeCount") else 0
-    except Exception:
-        last_change_count = 0
+    last_change_count = _clipboard_change_count(pasteboard)
+    was_clipboard_enabled = consent.capture_enabled("clipboard") and last_change_count is not None
 
     if consent.capture_enabled("clipboard"):
         logger.info("Listening for clipboard events...")
@@ -688,17 +712,13 @@ def run_daemon():
             if not key_available:
                 raise PermissionError("Master key destroyed (crypto-shred detected).")
 
-            current_change_count = last_change_count
-            if hasattr(pasteboard, "changeCount"):
-                try:
-                    current_change_count = pasteboard.changeCount()
-                except Exception:
-                    pass
+            current_change_count = _clipboard_change_count(pasteboard)
             clipboard_enabled = consent.capture_enabled("clipboard")
-            if not clipboard_enabled:
-                last_change_count = current_change_count
-            if clipboard_enabled and current_change_count != last_change_count:
-                last_change_count = current_change_count
+            changed, last_change_count, was_clipboard_enabled = _new_consented_clipboard_change(
+                current_change_count, clipboard_enabled, last_change_count,
+                was_clipboard_enabled,
+            )
+            if changed:
 
                 # Skip concealed/sensitive content (password managers)
                 if pasteboard.availableTypeFromArray_(CONCEALED_TYPES) is not None:

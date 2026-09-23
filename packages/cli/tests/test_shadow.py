@@ -987,6 +987,52 @@ def test_daemon_can_still_create_key_for_empty_profile(setup_test_env, monkeypat
     assert len(key) == 64
     assert setup_test_env["key_file"].read_text() == "d3JhcHBlZA=="
 
+
+@pytest.mark.parametrize("component", ["shadow_cli", "shadowd"])
+@pytest.mark.parametrize("source", ["keychain", "file"])
+def test_legacy_key_remains_usable_when_wrapping_is_unavailable(
+        setup_test_env, monkeypatch, component, source):
+    from latticeshadow import keychain, security
+
+    raw_key = "a" * 64
+    key_file = setup_test_env["key_file"]
+    if source == "keychain":
+        monkeypatch.setattr(keychain, "retrieve_key", lambda: raw_key)
+    else:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(raw_key, encoding="ascii")
+
+    def unavailable(*_args):
+        raise PermissionError("unavailable")
+
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave", unavailable)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave", unavailable)
+    assert setup_test_env[component].get_or_create_master_key() == raw_key
+    if source == "keychain":
+        assert not key_file.exists()
+    else:
+        assert key_file.read_text(encoding="ascii") == raw_key
+
+
+def test_clipboard_change_requires_post_consent_copy(setup_test_env):
+    gate = setup_test_env["shadowd"]._new_consented_clipboard_change
+    pasteboard = MockPasteboard()
+    pasteboard.set_content("copied before enabling")
+    initial_count = pasteboard.changeCount()
+    # Existing clipboard content when capture starts is only a baseline.
+    assert gate(initial_count, True, None, False) == (False, initial_count, True)
+    changed, count, enabled = gate(pasteboard.changeCount(), True, initial_count, True)
+    assert not changed
+    pasteboard.set_content("copied after enabling")
+    assert gate(pasteboard.changeCount(), True, count, enabled) == (True, 2, True)
+    # A copy made while paused must not appear when capture resumes.
+    assert gate(3, False, 2, True) == (False, 3, False)
+    assert gate(3, True, 3, False) == (False, 3, True)
+    assert gate(4, True, 3, True) == (True, 4, True)
+    # Failed pasteboard reads also require a fresh baseline.
+    assert gate(None, True, 4, True) == (False, 4, False)
+    assert gate(5, True, 4, False) == (False, 5, True)
+
 def test_cli_remove(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
     
