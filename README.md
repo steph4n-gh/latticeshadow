@@ -9,7 +9,7 @@ SQLite vector store with a macOS client.
 
 This is a **development prototype**, not a finished clipboard app or a security
 product. The daily-use alpha is being validated; integrated tests and selected
-desktop and guest-install checks pass, while its two-hour soak and public-binary
+desktop and guest-install checks pass, while its current-revision two-hour soak and public-binary
 release gates remain open. The
 [capability guide](docs/CAPABILITIES.md) says exactly where the edges are.
 

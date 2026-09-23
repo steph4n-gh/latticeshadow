@@ -1,7 +1,8 @@
 # Daily-use alpha validation
 
 Measured local runs: [retrieval relevance](recall-local.md),
-[15-minute driver smoke](local-smoke-2026-09-23.md), and
+[15-minute driver smoke](local-smoke-2026-09-23.md),
+[two-hour predecessor core soak](local-b603-soak-2026-09-23.md), and
 [10,000-event local precheck](local-performance-2026-09-23.md). The
 [current packaged query and recovery report](packaged-app-20669ff-2026-09-23.md),
 [preceding packaged query and recovery report](mini-b603-packaged-2026-09-23.md),
