@@ -23,9 +23,10 @@ capture source was selected.
 Escape closed Recall. With Finder in front, Option-Space sent through Screen
 Sharing instead triggered Finder Quick Look, as in the predecessor run. Remote
 modifier forwarding was not established, so the cross-app global shortcut
-remains unproven. A Return press on a selected result did not yield copy
-feedback or pasteboard text in this remote run; the **Copy** button result above
-is the verified copy path. No sanitized panel-only screenshot was retained.
+remains unproven. A Return press with the result row visibly focused did not
+yield copy feedback or pasteboard text in this remote run; Return from the
+search field was not tested. The **Copy** button result above is the verified
+copy path. No sanitized panel-only screenshot was retained.
 
 The app was installed from the ZIP inside the disposable VM without a
 quarantine attribute. Although Gatekeeper assessments were enabled there, this
