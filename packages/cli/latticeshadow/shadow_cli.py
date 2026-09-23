@@ -1363,7 +1363,10 @@ def do_config(args):
                 raise SystemExit("Use on|off for a capture, listener, or sync setting.")
             consent.set_consent(surface, value in ("on", "true", "yes", "1"))
         else:
-            cfg.set(args.key, args.value)
+            try:
+                cfg.set(args.key, args.value)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
         print(f"Set {args.key} = {args.value}")
         # Show auto-model if it was set
         if args.key == "memory.provider":

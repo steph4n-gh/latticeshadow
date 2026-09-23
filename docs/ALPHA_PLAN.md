@@ -564,3 +564,19 @@ without sending agents back to rediscover the repository.
 - P has exclusive Mini access for its bundle feasibility spike. py2app initially
   hit modulegraph recursion while scanning the Python model stack; the revised
   build is being measured. P1/P2 remain open.
+- G0 and most G1 code is integrated through `d9d81d3`: canonical event records,
+  tombstones, scoped timeline pagination, strict decryption, cross-process
+  revision handling, portable encrypted backup, explicit project assignment,
+  capture exclusions, opt-in age retention, desktop panel, and CLI adapters.
+  `57e1c8b` adds a revision-stamped sidecar manifest for equal-size interrupted
+  writes. Integrated DB suite: 227 passed before that manifest; C reports 228
+  after it. Integrated CLI suite: 202 passed, 5 hardware tests deselected
+  before the final app-launch adapter; its focused test passed. R's frozen
+  scenario fixture and evaluator are integrated; C is wiring its ranker into
+  the canonical scoped search. These results are code checks, not completed
+  cross-surface, guest, performance or soak gates.
+- U's panel commit `31b7340` has 19 focused tests and a local AppKit
+  construction smoke. Logged-in guest interaction and screenshots remain U1
+  work after P releases the exclusive Mini lease. A is implementing grants and
+  read-only scoped MCP against the integrated API. P has an offline bundle
+  build/verification smoke; minimal-guest and Gatekeeper evidence remain open.

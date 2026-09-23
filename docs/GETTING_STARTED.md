@@ -102,6 +102,31 @@ shadow status
 shadow resume
 ```
 
+To exclude a whole source or a literal piece of text before the daemon saves it,
+set a JSON array. Matches in text ignore case. These are literal strings, not
+regular expressions, and they cannot retroactively delete an event:
+
+```sh
+shadow config set inputs.excluded_sources '["terminal"]'
+shadow config set inputs.excluded_literals '["example secret prefix"]'
+```
+
+Each list accepts at most 100 nonempty entries of at most 256 UTF-8 bytes. An
+empty list (`'[]'`) removes that exclusion. To remove events older than 30 days,
+use `shadow config set retention.days 30`; `0` disables automatic retention.
+The daemon checks once at startup and hourly, using the event's occurrence time
+(or insertion time for legacy events without one). It deletes from the live
+canonical and optional hot index. Older backups, original source files, and
+data already shared with another application are separate copies.
+
+The menu-bar app (`shadow gui`) has a recall panel with recent events when the
+search field is empty. Select a result to see its source, time, project, ID, and
+preview. You can copy, open a supported link or file, assign a project, or
+confirm Forget. The menu lets you choose Option-Space, Control-Option-Space,
+Command-Option-Space, or Off for the shortcut. Use **Open Recall…** in the menu
+if a shortcut is unavailable. Desktop behavior is still being checked in a
+logged-in test VM for this alpha.
+
 Stop the daemon with:
 
 ```sh
@@ -116,6 +141,30 @@ starts. Disabling the daemon keeps it off across logins and reboots; it does not
 Use `shadow forget --id ...` for selected events, or inspect `shadow remove`
 before uninstalling. `shadow remove` asks separately whether to delete local
 data.
+
+## Make a portable backup
+
+Export a passphrase-encrypted snapshot of the canonical vault:
+
+```sh
+shadow backup export ~/Desktop/latticeshadow.lsb
+shadow backup restore ~/Desktop/latticeshadow.lsb --destination ~/Desktop/latticeshadow-restored
+shadow backup inspect --destination ~/Desktop/latticeshadow-restored
+```
+
+The passphrase is prompted, not placed on the command line. For a controlled
+script, `--passphrase-fd N` reads one line from an already-open descriptor.
+The archive includes event IDs, text, provenance, tombstones, and source-model
+identity. It excludes local keys, settings, logs, consent, sync state, and
+derived indexes. The current alpha rejects a plaintext payload above 256 MiB;
+export and restore can temporarily need several times that much RAM.
+
+Restore creates a **new** private directory and key, then verifies that it can
+reopen the encrypted vault. It does not touch your current vault or Keychain,
+enable capture, or connect an assistant. The destination's `.key` is a private
+0600 file; keep that directory and archive safe. The command prints activation
+steps for a fresh macOS profile without an existing LatticeShadow vault or
+Keychain key. There is no automatic replacement or merge of a live vault.
 
 ## Linux or another non-macOS system: use the DB library
 
