@@ -1,6 +1,28 @@
 # Desktop recall GUI validation
 
-## Final packaged app in a disposable Mac VM
+## Current `20669ff` packaged GUI smoke
+
+The unsigned Apple Silicon app in `LatticeShadow-20669ff-arm64.zip` was
+installed in a fresh, logged-in disposable macOS VM. The ZIP SHA-256 was
+`6f5e00f2ca44ab85956b47169adb2dd29475e81450ca3db2951f2c319e1a09d6`.
+Its bundled CLI saved one synthetic note (`gui-smoke-20669ff`) in a fresh
+Keychain-wrapped vault. VM clipboard sharing with the host was disabled; no
+capture source was selected.
+
+| Journey | Observed result |
+| --- | --- |
+| Menu and Recall | The menu reported **Capture needs consent** and opened the styled Recall panel. The note appeared under recent events. |
+| Search, filter, preview | Searching `widget` returned one result. Project filter `fieldguide` kept that result. Preview showed the exact synthetic text, note source, project, times, and event reference. |
+| Copy | **Copy** reported success; the guest pasteboard contained exactly `The widget queue recovered after a synthetic deployment drill.` |
+| Pause and consent | **Pause capture** changed to **Resume capture** while status remained **Capture needs consent**. Resume showed **Choose capture sources before resuming: clipboard, terminal_history** and kept capture paused. |
+
+This was a bounded smoke of the exact ZIP. The full Open/Assign/Forget journey
+was exercised on the predecessor `b603442` package below; it was not repeated
+on `20669ff`. The cross-app global shortcut, race ordering under overlapping
+searches, daemon capture, and a sanitized panel-only screenshot remain unproven
+by this run. The disposable VM was stopped afterward.
+
+## Preceding packaged app in a disposable Mac VM
 
 The unsigned Apple Silicon app in `LatticeShadow-b603442-arm64.zip` was
 installed and exercised in a logged-in disposable macOS VM. The ZIP SHA-256
@@ -45,8 +67,9 @@ therefore that status text is visual evidence only, not proof of daemon state.
 
 The dark panel rendered in the logged-in session with readable search, results,
 preview, provenance, and action controls. An inline panel image was inspected,
-but no sanitized image file was retained for documentation. The later
-packaged-app check is recorded above; cross-app shortcut behavior remains open.
+but no sanitized image file was retained for documentation. Later packaged-app
+checks of this styled revision appear above; cross-app shortcut behavior remains
+open.
 
 ## Earlier installed-app validation
 
