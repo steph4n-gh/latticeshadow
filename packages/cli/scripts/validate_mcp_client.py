@@ -51,14 +51,18 @@ async def validate(server_python: str, *, direct: bool = False) -> dict:
                   timestamp="2026-09-17T15:00:00Z")
         grant = create_grant(root, projects=["ops"], sources=["manual"], limit=5)
         if direct:
+            command = server_python
             arguments = ["-c", _DIRECT, str(root), grant["id"]]
         else:
-            arguments = ["-m", "latticeshadow.shadow_cli", "mcp", "serve",
+            command = str(Path(server_python).with_name("shadow"))
+            if not Path(command).is_file():
+                raise FileNotFoundError(f"installed shadow command missing next to {server_python}")
+            arguments = ["mcp", "serve",
                          "--grant", grant["id"], "--vault-dir", str(root)]
         environment = {"LATTICESHADOW_EMBEDDING_MODEL": "hash"}
         if os.environ.get("PYTHONPATH"):
             environment["PYTHONPATH"] = os.environ["PYTHONPATH"]
-        server = StdioServerParameters(command=server_python, args=arguments, env=environment)
+        server = StdioServerParameters(command=command, args=arguments, env=environment)
         async with Client(server, mode="legacy", read_timeout_seconds=20) as client:
             assert client.protocol_version == "2025-06-18", client.protocol_version
             tools = await client.list_tools()
