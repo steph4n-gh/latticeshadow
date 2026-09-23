@@ -1507,6 +1507,20 @@ def test_clipboard_copy_during_pause_at_read_is_not_stored(setup_test_env, monke
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     choose_capture_sources(clipboard=True)
     switched = threading.Event()
+    daemon_ready = threading.Event()
+    original_baseline = shadowd._clipboard_baseline
+    baseline_calls = 0
+
+    def signal_after_startup_baseline(pasteboard):
+        nonlocal baseline_calls
+        baseline = original_baseline(pasteboard)
+        baseline_calls += 1
+        # The second baseline is taken just before the main polling loop.
+        if baseline_calls == 2:
+            daemon_ready.set()
+        return baseline
+
+    monkeypatch.setattr(shadowd, "_clipboard_baseline", signal_after_startup_baseline)
 
     class SwitchingPasteboard(MockPasteboard):
         switch_on_read = False
@@ -1525,7 +1539,7 @@ def test_clipboard_copy_during_pause_at_read_is_not_stored(setup_test_env, monke
         thread = threading.Thread(target=shadowd.run_daemon)
         thread.start()
         try:
-            time.sleep(0.2)
+            assert daemon_ready.wait(10)
             pasteboard.switch_on_read = True
             pasteboard.set_content("ordinary first copy")
             assert switched.wait(3)
