@@ -47,6 +47,7 @@ DEFAULTS = {
         "ambient_context": False,
         "paused": False,
         "terminal_history_epoch": 0,
+        "clipboard_epoch": 0,
         "excluded_sources": [],
         "excluded_literals": [],
     },
@@ -289,6 +290,15 @@ def _set_locked(key: str, value: str) -> None:
             current[final_key] = value
     else:
         current[final_key] = value
+
+    # Low-level config writes are also used by migrations and tests. Keep
+    # capture transitions visible to a daemon even if off/on falls between polls.
+    if key in {"inputs.clipboard", "inputs.terminal_history", "inputs.paused"}:
+        inputs = config.setdefault("inputs", {})
+        if key in {"inputs.clipboard", "inputs.paused"}:
+            inputs["clipboard_epoch"] = int(inputs.get("clipboard_epoch", 0)) + 1
+        if key in {"inputs.terminal_history", "inputs.paused"}:
+            inputs["terminal_history_epoch"] = int(inputs.get("terminal_history_epoch", 0)) + 1
 
     # Auto-set default model when provider changes
     if key == "memory.provider" and value in DEFAULT_MODELS:

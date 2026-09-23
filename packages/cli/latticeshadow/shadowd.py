@@ -70,6 +70,12 @@ def _clipboard_baseline(pasteboard):
     return count, bool(before_enabled and enabled and before_epoch == epoch and count is not None), epoch
 
 
+def _clipboard_sample_still_valid(pasteboard, sampled_count, sampled_epoch):
+    enabled, epoch = consent.clipboard_state()
+    return (enabled and epoch == sampled_epoch
+            and _clipboard_change_count(pasteboard) == sampled_count)
+
+
 def _new_consented_clipboard_change(
         current_count, enabled, epoch, last_count, was_enabled, last_epoch):
     """Read changes only after a count baseline inside the current consent epoch."""
@@ -449,7 +455,7 @@ def run_daemon():
 
     pasteboard = AppKit.NSPasteboard.generalPasteboard()
     initial_change_count, initially_enabled, initial_epoch = _clipboard_baseline(pasteboard)
-    startup_events: list[str] = []
+    startup_events: list[tuple[str, int]] = []
     startup_lock = threading.Lock()
     startup_stop = threading.Event()
 
@@ -467,9 +473,9 @@ def run_daemon():
                 if changed:
                     if pasteboard.availableTypeFromArray_(CONCEALED_TYPES) is None:
                         content = pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
-                        if content:
+                        if content and _clipboard_sample_still_valid(pasteboard, current_count, epoch):
                             with startup_lock:
-                                startup_events.append(content)
+                                startup_events.append((content, epoch))
             except Exception:
                 pass
             startup_stop.wait(POLL_INTERVAL)
@@ -591,16 +597,20 @@ def run_daemon():
             pending_startup_events = list(startup_events)
             startup_events.clear()
 
-        for startup_content in pending_startup_events:
-            if not consent.capture_enabled("clipboard"):
-                break
+        for startup_content, startup_epoch in pending_startup_events:
             try:
                 content = startup_content.strip()
                 if MIN_CONTENT_CHARS < len(content) < MAX_CONTENT_BYTES:
                     content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
                     if content_hash != last_content_hash and capture_allowed("clipboard", content):
-                        last_content_hash = content_hash
-                        doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
+                        with config.mutation_lock():
+                            enabled, epoch = consent.clipboard_state()
+                            if not enabled or epoch != startup_epoch:
+                                continue
+                            doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
+                            if doc_id is None:
+                                continue
+                            last_content_hash = content_hash
                         if pot_chain:
                             pot_chain.append_event("clipboard", content)
                         try:
@@ -752,8 +762,14 @@ def run_daemon():
                                 logger.info("Feedback loop prevented for hash: %s", content_hash)
                             else:
                                 if content_hash != last_content_hash and capture_allowed("clipboard", content):
-                                    last_content_hash = content_hash
-                                    doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
+                                    with config.mutation_lock():
+                                        if not _clipboard_sample_still_valid(
+                                                pasteboard, current_change_count, clipboard_epoch):
+                                            continue
+                                        doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
+                                        if doc_id is None:
+                                            continue
+                                        last_content_hash = content_hash
                                     if pot_chain:
                                         pot_chain.append_event("clipboard", content)
                                     try:

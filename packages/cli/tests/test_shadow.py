@@ -288,6 +288,12 @@ def test_config_command_records_capture_choice(setup_test_env):
     with pytest.raises(SystemExit, match=r"Use on\|off"):
         run_cli(cli, ["config", "set", "inputs.terminal_history", "maybe"])
     assert consent.pending_capture_sources() == ["terminal_history"]
+    consent.set_consent("terminal_history", False)
+    _, before_epoch = consent.clipboard_state()
+    run_cli(cli, ["config", "set", "inputs.paused", "true"])
+    assert consent.clipboard_state() == (False, before_epoch + 1)
+    run_cli(cli, ["config", "set", "inputs.paused", "false"])
+    assert consent.clipboard_state() == (True, before_epoch + 2)
 
 
 def test_search_distinguishes_empty_results_from_errors(setup_test_env, monkeypatch, capsys):
@@ -1015,7 +1021,7 @@ def test_legacy_key_remains_usable_when_wrapping_is_unavailable(
 
 
 def test_clipboard_change_requires_post_consent_copy(setup_test_env):
-    from latticeshadow import consent
+    from latticeshadow import config, consent
 
     gate = setup_test_env["shadowd"]._new_consented_clipboard_change
     pasteboard = MockPasteboard()
@@ -1052,11 +1058,19 @@ def test_clipboard_change_requires_post_consent_copy(setup_test_env):
     enabled, restored_epoch = consent.clipboard_state()
     assert gate(pasteboard.changeCount(), enabled, restored_epoch, 4, True, resumed_epoch) == (
         False, 5, True, restored_epoch)
+    # A lower-level config write also bumps the persisted epoch.
+    config.set("inputs.clipboard", "false")
+    pasteboard.set_content("copied during direct config off")
+    config.set("inputs.clipboard", "true")
+    enabled, direct_epoch = consent.clipboard_state()
+    assert direct_epoch != restored_epoch
+    assert gate(pasteboard.changeCount(), enabled, direct_epoch, 5, True, restored_epoch) == (
+        False, 6, True, direct_epoch)
     # Failed pasteboard reads also require a fresh baseline.
-    assert gate(None, enabled, restored_epoch, 5, True, restored_epoch) == (
-        False, 5, False, restored_epoch)
-    assert gate(6, enabled, restored_epoch, 5, False, restored_epoch) == (
-        False, 6, True, restored_epoch)
+    assert gate(None, enabled, direct_epoch, 6, True, direct_epoch) == (
+        False, 6, False, direct_epoch)
+    assert gate(7, enabled, direct_epoch, 6, False, direct_epoch) == (
+        False, 7, True, direct_epoch)
 
 
 def test_clipboard_baseline_rejects_consent_change_during_sample(setup_test_env, monkeypatch):
@@ -1342,6 +1356,57 @@ def test_clipboard_capture_respects_disabled_input(setup_test_env, monkeypatch):
         finally:
             shadowd._running = False
             t.join(timeout=1.0)
+
+
+def test_clipboard_copy_during_pause_at_read_is_not_stored(setup_test_env, monkeypatch):
+    from latticeshadow import consent
+
+    shadowd = setup_test_env["shadowd"]
+    cli = setup_test_env["shadow_cli"]
+    monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
+    choose_capture_sources(clipboard=True)
+    switched = threading.Event()
+
+    class SwitchingPasteboard(MockPasteboard):
+        switch_on_read = False
+
+        def stringForType_(self, pb_type):
+            if self.switch_on_read:
+                self.switch_on_read = False
+                consent.set_paused(True)
+                self.set_content("secret copied while paused")
+                consent.set_paused(False)
+                switched.set()
+            return super().stringForType_(pb_type)
+
+    pasteboard = SwitchingPasteboard()
+    with patch_general_pasteboard(pasteboard):
+        thread = threading.Thread(target=shadowd.run_daemon)
+        thread.start()
+        try:
+            time.sleep(0.2)
+            pasteboard.switch_on_read = True
+            pasteboard.set_content("ordinary first copy")
+            assert switched.wait(3)
+            time.sleep(0.2)
+            vault = cli.get_vault(create_if_missing=True)
+            assert vault.count() == 0
+
+            pasteboard.set_content("copy after resumed capture")
+            deadline = time.monotonic() + 3
+            count = 0
+            while time.monotonic() < deadline:
+                with sqlite3.connect(setup_test_env["db_path"]) as conn:
+                    count = conn.execute(
+                        "SELECT COUNT(*) FROM vectors WHERE collection = 'clipboard'"
+                    ).fetchone()[0]
+                if count:
+                    break
+                time.sleep(0.02)
+            assert count == 1
+        finally:
+            shadowd._running = False
+            thread.join(timeout=2)
 
 
 def test_clipboard_revocation_skips_changes_while_daemon_runs(setup_test_env, monkeypatch):

@@ -1391,11 +1391,15 @@ def do_config(args):
             (name for name, spec in consent.SURFACES.items() if spec["config_key"] == args.key),
             None,
         )
-        if surface:
+        if surface or args.key == "inputs.paused":
             value = args.value.lower()
             if value not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
                 raise SystemExit("Use on|off for a capture, listener, or sync setting.")
-            consent.set_consent(surface, value in ("on", "true", "yes", "1"))
+            enabled = value in ("on", "true", "yes", "1")
+            if surface:
+                consent.set_consent(surface, enabled)
+            else:
+                consent.set_paused(enabled)
         else:
             try:
                 cfg.set(args.key, args.value)
