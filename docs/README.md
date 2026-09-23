@@ -9,6 +9,7 @@ remember a command you ran yesterday.
 | Install on macOS, save and find your first event, or enable capture | [Getting started](GETTING_STARTED.md) |
 | Learn what is implemented, experimental, or unavailable | [Capabilities and limits](CAPABILITIES.md) |
 | Understand the packages, storage, and trust boundaries | [Architecture](ARCHITECTURE.md) |
+| Implement the next milestone with coordinated agents and validation gates | [Daily-use alpha execution plan](ALPHA_PLAN.md) |
 | Choose a contribution or see acceptance criteria | [Improvement sprint](SPRINT.md) |
 | Use the macOS client | [CLI package guide](../packages/cli/README.md) |
 | Use the DB on its own | [DB package guide](../packages/db/README.md) |

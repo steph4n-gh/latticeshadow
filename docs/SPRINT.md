@@ -5,6 +5,11 @@ which command was used, where a source came from, and what to do next.
 The monorepo provides one development environment and test entry point;
 the following product work is still to do.
 
+The [daily-use alpha execution plan](ALPHA_PLAN.md) coordinates this backlog into
+one implementation campaign, with agent ownership, shared interfaces, acceptance
+gates, and macOS artifact validation. It is the next milestone's execution guide;
+the entries below retain the background and completed work.
+
 ## 1. Make recall meaningful
 
 - Wire one real local embedding model into the client and both vault openers.
