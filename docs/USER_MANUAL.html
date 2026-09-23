@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- markdown-sha256: 62ed83be34b049341d1cea7a9cdabc8d9b491a2f27531f5b5ac04d0457d56ea7 -->
+<!-- markdown-sha256: c4544e50828b6be7e163a54834ef7f304341d0ce48916abaf07d127982719002 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -154,6 +154,13 @@
       offer it as a public installer. Build details and exact evidence
       are in <a href="../packages/cli/packaging/README.md">App
       packaging</a>.</p>
+      <p>If you have a working 0.1 vault, <strong>do not replace its app
+      with this unsigned candidate</strong>. A wrapped key may require
+      Keychain approval after an app's signing identity changes, and the
+      0.1-to-0.2 upgrade path has not passed that check. Keep the
+      original app, vault, <code>.key</code> file, and Keychain item
+      intact. Deleting a key to clear an access prompt can make the
+      vault unreadable.</p>
       <h2 id="2-first-session-save-and-find-one-note">2. First session:
       save and find one note</h2>
       <p>Start with synthetic or harmless text. You can do all of this

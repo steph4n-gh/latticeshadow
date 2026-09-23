@@ -69,6 +69,12 @@ Gatekeeper, signing, and notarization are still open release gates. This manual
 does not offer it as a public installer. Build details and exact evidence are in
 [App packaging](../packages/cli/packaging/README.md).
 
+If you have a working 0.1 vault, **do not replace its app with this unsigned
+candidate**. A wrapped key may require Keychain approval after an app's signing
+identity changes, and the 0.1-to-0.2 upgrade path has not passed that check.
+Keep the original app, vault, `.key` file, and Keychain item intact. Deleting a
+key to clear an access prompt can make the vault unreadable.
+
 ## 2. First session: save and find one note
 
 Start with synthetic or harmless text. You can do all of this with the daemon
