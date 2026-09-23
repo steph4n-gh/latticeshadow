@@ -1,11 +1,15 @@
 # Local retrieval scorecard (relevance, not latency)
 
-The coordinator reported this synthetic, local real-model run while integrating
-the daily-use alpha search path. It is an **interim relevance result**; the
-integrated evaluator change is still awaiting its final commit SHA. Re-run the
-frozen evaluator on the review candidate and record that SHA before marking R1
-passed. The raw generated report is ignored at
-`benchmark_results/alpha-recall-integrated.json`.
+The coordinator ran the integrated production search and frozen evaluator at
+commit `44482e887f01b2fc4e974d46477582b43019e438` on a local Apple Silicon
+Mac:
+
+```sh
+.venv/bin/python packages/cli/scripts/evaluate_recall.py --output benchmark_results/alpha-recall-final.json
+```
+
+The raw report is ignored by Git. This is a synthetic relevance result; it does
+not measure search latency.
 
 | Measurement | Result |
 | --- | ---: |
@@ -18,7 +22,7 @@ passed. The raw generated report is ignored at
 | Ranking path | Hit@5 | MRR@10 |
 | --- | ---: | ---: |
 | Integrated production `search_events` | 0.960 | 0.888 |
-| Previous encrypted hybrid path | 0.760 | 0.641 |
+| Previous encrypted hybrid path | 0.765 | 0.669 |
 | Exact cosine baseline | 0.895 | 0.814 |
 | In-memory keyword baseline | 0.920 | 0.850 |
 
