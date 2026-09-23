@@ -115,6 +115,8 @@ def test_no_grant_is_read_only_and_fails_closed(scenario):
     names = {item["name"] for item in no_grant("tools/list")["result"]["tools"]}
     assert names == {"latticeshadow.recall", "latticeshadow.current_context",
                      "latticeshadow.summarize", "latticeshadow.resolve"}
+    assert all(tool["annotations"]["readOnlyHint"] is True for tool in
+               no_grant("tools/list")["result"]["tools"])
     assert no_grant("tools/call", {"name": "latticeshadow.recall", "arguments": {"query": "deploy"}})["error"]["message"] == "Sharing grant unavailable"
     assert no_grant("resources/read", {"uri": CITATION_PREFIX + allowed})["error"]["message"] == "Sharing grant unavailable"
     assert no_grant("prompts/get", {"name": "recall-with-citations"})["error"]["message"] == "Sharing grant unavailable"

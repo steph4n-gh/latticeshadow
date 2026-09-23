@@ -100,7 +100,7 @@ def _tool_specs() -> list[dict[str, Any]]:
         "since": {"type": "string"}, "until": {"type": "string"}},
         "additionalProperties": False}
     limit = {"type": "integer", "minimum": 1, "maximum": 50}
-    return [
+    specs = [
         {"name": "latticeshadow.recall", "description": "Find allowed, redacted memory. Scores rank results; they are not confidence.",
          "inputSchema": _schema({"query": {"type": "string", "maxLength": 4096}, "limit": limit,
                                  "scope": scope}, ["query"])},
@@ -112,6 +112,10 @@ def _tool_specs() -> list[dict[str, Any]]:
         {"name": "latticeshadow.resolve", "description": "Resolve one allowed citation against current memory and grant.",
          "inputSchema": _schema({"uri": {"type": "string", "maxLength": 1024}}, ["uri"])},
     ]
+    for spec in specs:
+        spec["annotations"] = {"readOnlyHint": True, "destructiveHint": False,
+                               "idempotentHint": True, "openWorldHint": False}
+    return specs
 
 
 def _resource_specs() -> list[dict[str, Any]]:
