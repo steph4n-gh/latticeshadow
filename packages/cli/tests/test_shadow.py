@@ -248,7 +248,7 @@ def test_cli_remember_initializes_store_without_capture(setup_test_env):
     assert events[0]["text"] == "Check release tests"
 
 
-def test_cli_install(setup_test_env, capsys):
+def test_cli_install(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
     
     assert not os.path.exists(setup_test_env["key_file"])
@@ -277,10 +277,15 @@ def test_cli_install(setup_test_env, capsys):
     assert plist_data["Label"] == cli.PLIST_LABEL
     assert plist_data["RunAtLoad"] is True
     assert plist_data["KeepAlive"] == {"SuccessfulExit": False}
+    mock_subprocess_run.assert_any_call(
+        ["launchctl", "disable", f"gui/{os.getuid()}/{cli.PLIST_LABEL}"],
+        capture_output=True,
+        text=True,
+    )
     assert not (setup_test_env["log_dir"] / "latticeshadow.zsh").exists()
     assert not setup_test_env["zshrc_path"].exists()
 
-def test_cli_install_idempotency(setup_test_env, capsys):
+def test_cli_install_idempotency(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
     
     # Run install first time
@@ -307,6 +312,7 @@ def test_cli_enable_disable(setup_test_env, mock_subprocess_run):
     calls = [c[0][0] for c in mock_subprocess_run.call_args_list]
     assert any("unload" in cmd for cmd in calls)
     assert any("load" in cmd for cmd in calls)
+    assert any("enable" in cmd for cmd in calls)
 
     # Test disable
     mock_subprocess_run.reset_mock()
@@ -314,6 +320,7 @@ def test_cli_enable_disable(setup_test_env, mock_subprocess_run):
     assert mock_subprocess_run.call_count >= 1
     calls = [c[0][0] for c in mock_subprocess_run.call_args_list]
     assert any("unload" in cmd for cmd in calls)
+    assert any("disable" in cmd for cmd in calls)
 
 
 def test_cli_enable_reports_launch_failure(setup_test_env, mock_subprocess_run, capsys):
@@ -328,7 +335,26 @@ def test_cli_enable_reports_launch_failure(setup_test_env, mock_subprocess_run, 
     assert "enabled and started" not in capsys.readouterr().out
 
 
-def test_cli_install_refreshes_old_checkout(setup_test_env):
+def test_cli_enable_rolls_back_login_state_when_load_fails(setup_test_env, mock_subprocess_run):
+    cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True)
+    setup_test_env["plist_path"].parent.mkdir(parents=True, exist_ok=True)
+    setup_test_env["plist_path"].write_text("invalid plist")
+
+    def launch_result(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 5 if args[1] == "load" else 0
+        result.stderr = "Invalid property list" if result.returncode else ""
+        return result
+
+    mock_subprocess_run.side_effect = launch_result
+    with pytest.raises(SystemExit, match="Failed to start LatticeShadow: Invalid property list"):
+        cli.do_enable()
+    calls = [call.args[0][1] for call in mock_subprocess_run.call_args_list]
+    assert calls == ["unload", "enable", "load", "disable"]
+
+
+def test_cli_install_refreshes_old_checkout(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     setup_test_env["zshrc_path"].write_text(
         "# personal settings\n"
@@ -342,7 +368,7 @@ def test_cli_install_refreshes_old_checkout(setup_test_env):
     assert "LATTICESHADOW_ZSH" not in updated
 
 
-def test_shell_integration_is_explicit_and_reversible(setup_test_env):
+def test_shell_integration_is_explicit_and_reversible(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     zshrc = setup_test_env["zshrc_path"]
     original = "# personal settings\nbindkey '^I' expand-or-complete\n"
@@ -523,7 +549,7 @@ def test_cli_remove(setup_test_env, mock_subprocess_run, capsys):
 
 # --- Security and Permissions Tests ---
 
-def test_security_permissions(setup_test_env):
+def test_security_permissions(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     
     # Perform install to create dirs/files

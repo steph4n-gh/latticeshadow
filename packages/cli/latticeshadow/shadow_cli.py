@@ -481,7 +481,22 @@ def do_rebuild_index(args):
         print(f"Database backup (keep private): {backup}")
 
 
+def _set_launch_agent_enabled(enabled: bool) -> None:
+    action = "enable" if enabled else "disable"
+    service = f"gui/{os.getuid()}/{PLIST_LABEL}"
+    result = subprocess.run(["launchctl", action, service], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"Failed to {action} LatticeShadow at login: {result.stderr.strip()}")
+
+
 def do_install():
+    # A plist in LaunchAgents is discovered at login. Keep installation itself
+    # from enrolling capture, including on the next login or reboot.
+    if os.path.exists(PLIST_PATH):
+        do_disable()
+    else:
+        _set_launch_agent_enabled(False)
+
     log_dir = get_log_dir()
     os.makedirs(log_dir, mode=0o700, exist_ok=True)
     os.chmod(log_dir, 0o700)
@@ -561,8 +576,13 @@ def do_enable():
         raise SystemExit("Error: plist not found. Run 'shadow install' first.")
     subprocess.run(["launchctl", "unload", PLIST_PATH],
                     capture_output=True)  # unload first to avoid double-load
+    try:
+        _set_launch_agent_enabled(True)
+    except SystemExit as exc:
+        raise SystemExit(f"Failed to start LatticeShadow: {exc}") from exc
     result = subprocess.run(["launchctl", "load", PLIST_PATH], capture_output=True, text=True)
     if result.returncode != 0:
+        _set_launch_agent_enabled(False)
         raise SystemExit(f"Failed to start LatticeShadow: {result.stderr.strip()}")
     print("✓ LatticeShadow daemon enabled and started.")
 
@@ -585,6 +605,7 @@ def do_disable():
             print(f"Warning: SMAppService unregistration failed: {error}.")
 
     if os.path.exists(PLIST_PATH):
+        _set_launch_agent_enabled(False)
         result = subprocess.run(["launchctl", "unload", PLIST_PATH], capture_output=True, text=True)
         if result.returncode != 0:
             status = subprocess.run(["launchctl", "list", PLIST_LABEL], capture_output=True)

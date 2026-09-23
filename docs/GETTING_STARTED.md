@@ -78,7 +78,9 @@ shadow enable
 ```
 
 `shadow install` prepares a launch agent and key material; it does not start the
-daemon. `shadow enable` loads the retrieval model and starts it. The daemon
+daemon, including at the next login. Re-running install stops an existing
+daemon; run `shadow enable` again when ready. `shadow enable` loads the retrieval
+model and starts it. The daemon
 captures future changes, not a guaranteed complete record of your past work.
 The Zsh history watcher begins at the end of the current history file, and
 history writes depend on your shell settings. Clipboard capture skips some
@@ -99,7 +101,7 @@ shadow status
 If you want to change sources later, disable the daemon, run
 `shadow consent set <surface> on|off`, check `shadow consent status`, then enable
 it again. In particular, the terminal watcher is selected when the daemon
-starts. Disabling the daemon stops capture; it does not delete saved memories.
+starts. Disabling the daemon keeps it off across logins and reboots; it does not delete saved memories.
 Use `shadow forget --id ...` for selected events, or inspect `shadow remove`
 before uninstalling. `shadow remove` asks separately whether to delete local
 data.
