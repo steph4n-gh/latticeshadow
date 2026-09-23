@@ -9,18 +9,19 @@ diary. The latter would be alarming even if it worked.
 
 “Implemented” below means the repository has a command or API and automated
 coverage. It does not mean the feature has had broad use on real machines or a
-security audit. Start with the [manual walkthrough](GETTING_STARTED.md).
+security audit. Start with the [user manual](USER_MANUAL.md) or the shorter
+[first-run guide](GETTING_STARTED.md).
 
 | Area | What exists | Current limit |
 | --- | --- | --- |
-| Manual memory on macOS | `shadow remember`, scoped `shadow timeline`, `shadow search`, project assignment, and `shadow forget` save, inspect, rank, and delete local events. | Integrated real-model search reached [96% top-five recall](validation/recall-local.md) on an authored synthetic fixture; the 10,000-event hardware latency run is pending. Search returns suggestions, not answer confidence. |
+| Manual memory on macOS | `shadow remember`, scoped `shadow timeline`, `shadow search`, project assignment, and `shadow forget` save, inspect, rank, and delete local events. | Integrated real-model search reached [96% top-five recall](validation/recall-local.md) on an authored synthetic fixture. A [10,000-event Mini source run](validation/mini-source-performance-2026-09-23.md) met the warm latency target; packaged-app timing is pending. Search returns suggestions, not answer confidence. |
 | Local retrieval model | The CLI pins a 128-dimensional Static Retrieval MRL model and records model identity for collections. | First use downloads the model; incompatible old vectors require an explicit rebuild. |
 | Background capture | An opt-in daemon reads future clipboard text and Zsh history entries. Both sources default off and require explicit choices. Pause persists; literal/source exclusions and optional age retention are implemented. | Concealment markers and exclusions are incomplete secret boundaries. Reboot and longer desktop validation are still underway. |
 | Recovery | `shadow backup export`, `restore`, and `inspect` create an authenticated portable archive and a separately keyed recovery destination. | The 256 MiB plaintext cap can need several times that RAM. A fresh-guest restore and activation walkthrough remain to be validated; populated live vaults are never automatically replaced. |
 | DB library | `latticeshadow-db` works without the macOS client and provides SQLite document storage, retrieval, metadata filters, and delete operations. | Without a caller-provided embedding function it uses hash vectors, which are not semantic. Experimental indexes need workload-specific testing. |
 | MCP | Explicit local grants restrict read-only recall, recent context, extractive summaries, and live citation resolution. An independent SDK test and a synthetic Codex CLI host walkthrough passed. | Grant policy and pattern redaction do not stop a separate local process from reading files or guarantee that every secret is removed. |
-| Menu bar and native companion | A recall panel with scope filters, preview, copy/open, project assignment, and confirmed forget is implemented. | Focused tests pass; logged-in guest interaction and shortcut/TCC behavior are still being checked. |
-| Releases | Tags publish source archives. An unsigned integrated Apple Silicon app passed offline save/search and daemon lifecycle checks in a stripped disposable guest. | Upgrade Keychain approval, UI interaction, stock Gatekeeper, and signing/notarization remain to be validated before a public binary release. |
+| Menu bar and native companion | A recall panel with scope filters, preview, copy/open, project assignment, and confirmed forget is implemented. | A [logged-in guest journey](validation/desktop-gui.md) passed on a prior artifact. The styled final artifact, global shortcut, and shortcut permission behavior still need checks. |
+| Releases | Tags publish source archives. An unsigned integrated Apple Silicon app passed offline save/search, daemon, and logged-in Recall checks in disposable guests. | That earlier artifact exposed a key-access flaw now fixed in source; rebuilt-artifact checks, upgrade Keychain approval, stock Gatekeeper, signing, and notarization remain before a public binary release. |
 
 ## Where does the information go?
 

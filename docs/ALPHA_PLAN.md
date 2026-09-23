@@ -446,8 +446,8 @@ just to turn the table green.
 | --- | --- | --- | --- |
 | M1 | Stable IDs and correct occurrence/ingestion times across sources, migration and rebuild | `0af8643`; `make test-db` 228, `71d2ecf` `make test-cli` 222; timeline/rebuild tests in those suites | Passed locally |
 | M2 | Filters correct before ranking/limits; zero excluded records returned | CLI/UI/MCP tests pass; the prior `0af8643` [guest GUI journey](validation/desktop-gui.md) exercised project, source, Unassigned, and time filters; final styled artifact remains to be checked | Passed on prior artifact; final pending |
-| M3 | Cross-process writes/deletes/rebuilds stay consistent; no resurrection after fault/restart | `44482e8`; `validate_lifecycle.py lifecycle` 12/12, `benchmark_results/alpha-lifecycle-integrated.json`; final candidate rerun pending | Passed locally; final pending |
-| M4 | Retention/exclusions/consent/pause behave as documented; experiments off by default | `0af8643` CLI suite includes consent, retention, rapid pause/resume; reboot scenario awaits guest | Pending reboot check |
+| M3 | Cross-process writes/deletes/rebuilds stay consistent; no resurrection after fault/restart | `3d52d65`; `validate_lifecycle.py lifecycle --report benchmark_results/alpha-lifecycle-3d52d65.json` 12/12 on Mac16,8, macOS 27.0; raw report ignored | Passed locally on candidate |
+| M4 | Retention/exclusions/consent/pause behave as documented; experiments off by default | `3d52d65` CLI suite includes consent epochs, read-time clipboard revocation, retention, and pause/resume; reboot scenario awaits guest | Pending reboot check |
 | M5 | Portable recovery preserves canonical fields in fresh guest without source key; failures leave old vault usable | `44482e8` lifecycle and backup tests pass; fresh-guest restore awaits final artifact | Pending fresh guest |
 | R1 | Hit@5 at least 90% on 200 held-out answerable queries; 50 no-answer cases reported separately | `44482e8`; `evaluate_recall.py` 0.960 hit@5, 0.888 MRR@10; [scorecard](validation/recall-local.md) | Passed locally |
 | R2 | Warm user-visible search p95 below 500 ms over 10,000 events on the Mini; cold cost reported separately | `71d2ecf` source-process [Mini 10k run](validation/mini-source-performance-2026-09-23.md): p95 40.11 ms, cold costs reported; packaged-app query pending | Source passed; artifact pending |
@@ -457,7 +457,7 @@ just to turn the table green.
 | P1 | Standalone app works without development tools; install/upgrade/uninstall preserve chosen state | `0af8643` stripped guest passed offline save/search and daemon checks, but [headless Keychain failure](validation/desktop-gui.md) replaced the flat key; guarded in `71d2ecf`; final rebuild, key-preservation recheck, and upgrade remain pending | Pending rebuilt app |
 | P2 | Final signed/notarized artifact opens under stock Gatekeeper/quarantine | Current app is unsigned; credentials and stock-guest check not yet supplied | Pending external signing |
 | E1 | Integrated cross-surface journey and 2-hour candidate soak pass; resource behavior reported | `44482e8` CLI/MCP/delete/restart journey passes; desktop journey and actual 2-hour soak pending | Pending guest and elapsed run |
-| E2 | Standard suites/docs, model tests, native/build checks and final independent review pass for integrated change | `0af8643`: DB 228, CLI 217, model 2, docs pass; three review findings fixed; final app/CI checks pending | Pending final CI/lab |
+| E2 | Standard suites/docs, model tests, native/build checks and final independent review pass for integrated change | `3d52d65`: DB 228, CLI 231, model 2, docs pass; native release build passed at `dd079b3`; independent review findings addressed; final app/CI checks pending | Pending final CI/lab |
 
 A 24-hour soak is optional additional release evidence, with its own pending/pass
 entry if started; the 2-hour result must never be described as multi-day testing.
