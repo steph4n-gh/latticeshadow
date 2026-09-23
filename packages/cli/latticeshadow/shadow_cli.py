@@ -2285,10 +2285,10 @@ def main():
   mcp serve       Serve redacted memory over MCP stdio
   sleep           Trigger REM sleep consolidation
   shred           Panic button: crypto-shred all history
-  install         Install the background daemon and CLI alias
+  install         Prepare the background daemon without starting capture
   enable          Start the background daemon
   disable         Stop the background daemon
-  remove          Uninstall everything
+  remove          Remove background integration; ask before deleting vault data
   doctor          Run diagnostic health check
   compile         Compile daily history into a holographic memory vector
   recall <query>  Recall a document from the holographic memory vector
@@ -2485,7 +2485,7 @@ def main():
     shell_sub.add_parser("disable")
     subparsers.add_parser("enable", help="Start the daemon")
     subparsers.add_parser("disable", help="Stop the daemon")
-    subparsers.add_parser("remove", help="Uninstall everything")
+    subparsers.add_parser("remove", help="Remove background integration; ask before deleting vault data")
     subparsers.add_parser("doctor", help="Run diagnostic health check")
 
     # Drift Alarms / Calibration commands
