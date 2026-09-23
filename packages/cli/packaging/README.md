@@ -174,8 +174,16 @@ synthetic backup exited promptly, created no destination, and showed no py2app
 launch error. Correct restore, inspection, and activation reopened two retained
 events and one deletion tombstone; the first `timeline --json` output parsed
 cleanly with both retained IDs. The guest did not create a software Keychain
-keypair, so this run did not trigger a key-migration notice. The full packaged
-performance and backup repeat is being run separately on this exact archive.
+keypair, so this run did not trigger a key-migration notice. In two further
+fresh stripped guests, the exact archive passed a complete export/restore flow:
+the retained canonical event JSON matched byte-for-byte after activation and
+the deletion tombstone persisted. A wrong passphrase left no destination and
+did not interfere with a later correct restore. The first `timeline --json`
+after activation remained valid JSON, with the key-migration notice on stderr.
+The same archive handled 100 warmed full MCP queries against 10,000 synthetic
+events at p95 300.57 ms; the cold first call took 5.36 s. See the
+[final package lab report](../../../docs/validation/mini-b603-packaged-2026-09-23.md)
+for the workload and limits.
 
 Interactive Keychain approval, successful legacy 0.1.0 vault decryption, final
 styled GUI inspection, stock Gatekeeper first launch, Developer ID signing,
