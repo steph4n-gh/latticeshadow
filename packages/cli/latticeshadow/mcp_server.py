@@ -61,6 +61,11 @@ def _bounded_redact(value: Any, *, depth: int = 0) -> tuple[Any, bool]:
 
 
 def _event(event: dict[str, Any]) -> dict[str, Any]:
+    # A caller may choose an arbitrary ID. Returning that ID in a stable URI
+    # would bypass redaction, so such records are unavailable to this bridge.
+    doc_id = str(event["id"])
+    if redact(doc_id) != doc_id:
+        raise ValueError("Event unavailable")
     metadata = event.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
@@ -68,16 +73,25 @@ def _event(event: dict[str, Any]) -> dict[str, Any]:
                         if key in _METADATA_KEYS}
     clean_text, changed_text = _bounded_redact(str(event.get("text") or ""))
     clean_metadata, changed_meta = _bounded_redact(allowed_metadata)
+    clean_source, changed_source = _bounded_redact(event.get("source"))
+    clean_project, changed_project = _bounded_redact(event.get("project"))
     # Event identifiers are opaque local references. They are percent-encoded in
     # the URI; clients never need to interpret them.
     result = {key: event.get(key) for key in
-              ("id", "type", "source", "timestamp", "captured_at", "project")}
+              ("id", "type", "timestamp", "captured_at")}
+    result.update({"source": clean_source, "project": clean_project})
     result.update({"text": clean_text, "metadata": clean_metadata,
-                   "citation": CITATION_PREFIX + quote(str(event["id"]), safe=""),
-                   "redacted": changed_text or changed_meta or bool(set(metadata) - _METADATA_KEYS)})
+                   "citation": CITATION_PREFIX + quote(doc_id, safe=""),
+                   "redacted": changed_text or changed_meta or changed_source or changed_project
+                   or bool(set(metadata) - _METADATA_KEYS)})
     if event.get("score") is not None:
         result["ranking_score"] = event["score"]
     return result
+
+
+def _visible_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_event(event) for event in events
+            if redact(str(event["id"])) == str(event["id"])]
 
 
 def _result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -207,11 +221,11 @@ def _call_tool(name: str, arguments: Any, vault_factory: VaultFactory,
     if name == "latticeshadow.recall":
         query = _query(args.get("query"))
         events = search_events(vault_factory(), query, scope=scope, limit=limit)
-        return _result({"query": query, "events": [_event(event) for event in events]})
+        return _result({"query": query, "events": _visible_events(events)})
     query = _query(args.get("query"), optional=True) if name == "latticeshadow.summarize" else ""
     events = (search_events(vault_factory(), query, scope=scope, limit=limit) if query else
               fetch_events(vault_factory(), scope=scope, limit=limit)["events"])
-    redacted = [_event(event) for event in events]
+    redacted = _visible_events(events)
     if name == "latticeshadow.summarize":
         kinds: dict[str, int] = {}
         for event in redacted:
@@ -226,8 +240,8 @@ def _read_resource(uri: str, vault_factory: VaultFactory, grant_id: str | None,
                    grant_store: str, startup_ceiling: dict[str, Any] | None) -> dict[str, Any]:
     scope, cap = _active_scope(grant_id, grant_store, startup_ceiling)
     if uri in {"latticeshadow://timeline/recent", "latticeshadow://current-context"}:
-        payload = {"events": [_event(event) for event in
-                              fetch_events(vault_factory(), scope=scope, limit=min(20, cap))["events"]]}
+        payload = {"events": _visible_events(
+            fetch_events(vault_factory(), scope=scope, limit=min(20, cap))["events"])}
     elif isinstance(uri, str) and uri.startswith(CITATION_PREFIX):
         payload = {"event": _read_event(uri, vault_factory, scope)}
     else:

@@ -90,6 +90,32 @@ def test_citation_percent_encodes_caller_supplied_id(scenario):
     assert ask("resources/read", {"uri": CITATION_PREFIX + "manual/ops note"})["error"]["message"] == "Event unavailable"
 
 
+def test_sensitive_caller_id_is_withheld_and_display_labels_are_redacted(scenario):
+    vault, _, allowed, _, _, ask, root = scenario
+    sensitive_id = add_event(vault, "note", "safe body but unsafe ID", source="manual",
+                             project="ops", doc_id="note_password=syntheticsecret")
+    recent = _payload(ask("tools/call", {"name": "latticeshadow.current_context",
+                                         "arguments": {"limit": 3}}))["events"]
+    assert sensitive_id not in {event["id"] for event in recent}
+    assert allowed in {event["id"] for event in recent}
+    hidden = ask("resources/read", {"uri": CITATION_PREFIX + sensitive_id})
+    absent = ask("resources/read", {"uri": CITATION_PREFIX + "no-such-id"})
+    assert hidden["error"] == absent["error"]
+
+    label = "ops password=syntheticsecret"
+    label_id = add_event(vault, "note", "label test", source="manual", project=label)
+    label_grant = create_grant(root, projects=[label], sources=["manual"])
+    response = handle_request(
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "latticeshadow.current_context", "arguments": {}}},
+        lambda: vault, "unused", str(root), grant_id=label_grant["id"],
+        startup_ceiling=label_grant)
+    event = _payload(response)["events"][0]
+    assert event["id"] == label_id
+    assert event["project"] == "ops password=[REDACTED]"
+    assert event["redacted"] is True
+
+
 def test_revocation_and_startup_ceiling(scenario):
     _, grant, allowed, _, _, ask, root = scenario
     store = root / "sharing_grants.json"

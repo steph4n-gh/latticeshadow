@@ -83,6 +83,11 @@ allowed text and metadata; long text and deep or large metadata are truncated.
 The `redacted` indicator is true when substitution, truncation, or omission
 occurred. Pattern matching can miss secrets, especially unusual formats. Scope
 selection is the stronger control: share fewer projects and sources.
+Project and source display labels receive the same pattern redaction. An event
+whose caller-chosen ID matches a known secret pattern is withheld from MCP
+entirely, because the stable citation URI would otherwise repeat that ID.
+The local timeline still contains that event. Unrecognized secret-like IDs
+remain possible; avoid putting credentials in event IDs or labels.
 
 The MCP process runs with your local user privileges and can open the vault. A
 grant is application policy enforced by this server, not a sandbox or a
