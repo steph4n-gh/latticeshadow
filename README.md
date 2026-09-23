@@ -42,9 +42,9 @@ the macOS client is not installed on Linux.
 
 | Area | Current state |
 | --- | --- |
-| Manual memory | `shadow remember`, scoped timeline and search, project assignment, and explicit forget are implemented and tested with disposable data. The integrated retrieval scorecard and full Mini performance run are still in progress. |
+| Manual memory | `shadow remember`, scoped timeline and search, project assignment, and explicit forget are implemented and tested with disposable data. [Integrated synthetic recall](docs/validation/recall-local.md) passed its top-five target; the full Mini performance run is pending. |
 | Background capture | macOS clipboard and terminal capture require explicit source choices and `shadow enable`. Pause persists; literal/source exclusions and optional age retention are implemented. Broader desktop and reboot validation is still in progress. |
-| Assistant access | Local project/source grants restrict a read-only stdio MCP server. An independent MCP SDK test passes; an assistant-host walkthrough is still being checked. See the [sharing guide](docs/MCP.md). |
+| Assistant access | Local project/source grants restrict a read-only stdio MCP server. An independent MCP SDK test and a synthetic Codex CLI host walkthrough pass. See the [sharing guide](docs/MCP.md). |
 | Database | `latticeshadow-db` installs independently and supports document/vector storage, metadata, retrieval, and optional research indexes. |
 | Desktop and peer features | The menu-bar recall panel is implemented; logged-in guest interaction is still pending. Cross-device sync, autonomous repair, and several retrieval modes remain experimental. |
 | Distribution | Source releases are public. An unsigned standalone Apple Silicon app candidate has been built and tested in a stripped disposable guest; the integrated candidate, signing, and notarization are still pending. |

@@ -213,7 +213,7 @@ and current citation resolution. No grant means no memory reads. Run
 `shadow mcp grant revoke GRANT_ID` to stop later requests. Redaction remains
 best effort, and already shared text cannot be recalled from an assistant.
 See the [MCP sharing guide](MCP.md) for host arguments, limits, and the
-independent client test. A real assistant-host walkthrough is still pending.
+independent client test and a synthetic Codex CLI host walkthrough.
 
 ## If something goes wrong
 

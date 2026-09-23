@@ -89,8 +89,8 @@ allowlist; `shadow mcp grant preview GRANT_ID` shows eligible records. Launch
 `shadow mcp serve --grant GRANT_ID` from a configured MCP host. The server is
 read-only: scoped recall, current context, extractive summaries, and live
 citations. Revoke with `shadow mcp grant revoke GRANT_ID`. A tested independent
-MCP SDK client can use the installed command; an assistant-host walkthrough is
-still pending. See the [sharing guide](../../docs/MCP.md) for limits and a host
+MCP SDK client can use the installed command; a synthetic Codex CLI host also
+recalled and resolved a citation. See the [sharing guide](../../docs/MCP.md) for limits and a host
 configuration example. Peer mesh synchronization, homomorphic queries, and proof
 handling are experimental; the P2P proofs are simulated and do not provide
 zk-SNARK security. Mesh queries now require trusted device pairing and signed
