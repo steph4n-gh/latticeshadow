@@ -50,6 +50,8 @@ SURFACES: dict[str, dict[str, Any]] = {
     },
 }
 
+CAPTURE_SOURCES = ("clipboard", "terminal_history")
+
 
 def _set_nested(root: dict[str, Any], dotted_key: str, value: Any) -> None:
     current = root
@@ -59,13 +61,22 @@ def _set_nested(root: dict[str, Any], dotted_key: str, value: Any) -> None:
     current[parts[-1]] = value
 
 
+def _get_nested(root: dict[str, Any], dotted_key: str) -> Any:
+    current = root
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
 def consent_status() -> dict[str, Any]:
     cfg = config.load_config()
     consent_cfg = cfg.get("consent", {})
     surfaces_cfg = consent_cfg.get("surfaces", {})
     surfaces = {}
     for name, spec in SURFACES.items():
-        enabled = bool(config.get(spec["config_key"]))
+        enabled = bool(_get_nested(cfg, spec["config_key"]))
         consented = surfaces_cfg.get(name)
         surfaces[name] = {
             "label": spec["label"],
@@ -73,13 +84,25 @@ def consent_status() -> dict[str, Any]:
             "config_key": spec["config_key"],
             "enabled": enabled,
             "consented": bool(consented) if consented is not None else False,
-            "needs_consent": consented is None,
+            "needs_consent": not isinstance(consented, bool) or consented != enabled,
         }
     return {
         "completed": bool(consent_cfg.get("completed")),
         "version": int(consent_cfg.get("version", 1)),
         "surfaces": surfaces,
     }
+
+
+def pending_capture_sources() -> list[str]:
+    surfaces = consent_status()["surfaces"]
+    return [name for name in CAPTURE_SOURCES if surfaces[name]["needs_consent"]]
+
+
+def capture_enabled(name: str) -> bool:
+    if name not in CAPTURE_SOURCES:
+        raise ValueError(f"Unknown capture source: {name}")
+    state = consent_status()["surfaces"][name]
+    return state["enabled"] and not state["needs_consent"]
 
 
 def set_consent(surface: str, enabled: bool) -> dict[str, Any]:

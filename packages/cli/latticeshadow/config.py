@@ -38,8 +38,8 @@ DEFAULTS = {
         },
     },
     "inputs": {
-        "clipboard": True,
-        "terminal_history": True,
+        "clipboard": False,
+        "terminal_history": False,
         "ambient_context": False,
     },
     "sync": {

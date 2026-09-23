@@ -57,8 +57,8 @@ shadow disable
 
 `shadow install` prepares the launch agent without starting capture.
 The wizard shows each optional data source and network surface. Clipboard and
-terminal capture are enabled by default in the configuration, so review those
-choices before running `shadow enable`. That command loads the model and starts
+terminal capture default to off; both need an explicit on/off choice before
+`shadow enable`. That command loads the model and starts
 the daemon; `shadow disable` stops it. Optional Zsh widgets require
 `shadow shell enable`; that command does
 not bind keys or replace Tab completion. You can choose a binding yourself,

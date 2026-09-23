@@ -243,24 +243,23 @@ def do_search(query, paste_mode=False):
     try:
         vault = get_vault()
         if not vault or vault.count() == 0:
-            print("No matching clipboard history found.")
+            print("No matching memories found.")
             return
-    except Exception:
-        print("No matching clipboard history found.")
-        return
+    except Exception as exc:
+        raise SystemExit(f"Search failed while opening the vault: {exc}") from exc
 
     if not paste_mode:
         print(f"Searching for '{query}'...")
     try:
         res = vault.search(query, n_results=5, hybrid=True)
         if not res or not res.documents:
-            print("No matching clipboard history found.")
+            print("No matching memories found.")
             return
 
         if paste_mode:
             # Copy the top result back to the clipboard and exit
             top_doc = res.documents[0]
-            proc = subprocess.run(["pbcopy"], input=top_doc.encode("utf-8"))
+            subprocess.run(["pbcopy"], input=top_doc.encode("utf-8"), check=True)
             # Truncate for display
             display = top_doc if len(top_doc) <= 120 else top_doc[:120] + "..."
             print(f"✓ Copied to clipboard: {display}")
@@ -276,8 +275,8 @@ def do_search(query, paste_mode=False):
             display = doc if len(doc) <= 200 else doc[:200] + "..."
             print(f"\n\033[96m--- Result {i+1} (Score: {score:.4f}){ts_str} ---\033[0m")
             print(display)
-    except Exception:
-        print("No matching clipboard history found.")
+    except Exception as exc:
+        raise SystemExit(f"Search failed: {exc}") from exc
 
 
 def do_paste(query):
@@ -518,7 +517,7 @@ def do_install():
     _configure_shell(opted_in)
 
     print("\nInstall complete! Run 'shadow enable' to start the daemon.")
-    print("Before first run, review listeners with: shadow consent wizard")
+    print("Before first run, choose capture sources with: shadow consent wizard")
     print("Optional shell widgets: shadow shell enable")
     print("\n💡 Tip: Unlock advanced features:")
     print("  - Enable active browser tracking: 'shadow config set inputs.ambient_context true'")
@@ -527,6 +526,14 @@ def do_install():
 
 
 def do_enable():
+    from latticeshadow import consent
+
+    pending = consent.pending_capture_sources()
+    if pending:
+        raise SystemExit(
+            f"Choose capture sources before starting: {', '.join(pending)}. "
+            "Run 'shadow consent wizard' or 'shadow consent set <source> on|off' for each."
+        )
     if os.environ.get("LATTICESHADOW_EMBEDDING_MODEL") != "hash":
         from latticeshadow.vaults import _local_model
 
@@ -620,6 +627,8 @@ def do_remove():
 
 
 def do_status():
+    from latticeshadow import consent
+
     # Check if daemon is running via launchctl
     res = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
     is_running = False
@@ -636,6 +645,9 @@ def do_status():
         print("Daemon:   \033[92m● RUNNING\033[0m")
     else:
         print("Daemon:   \033[91m● STOPPED\033[0m")
+    pending = consent.pending_capture_sources()
+    if pending:
+        print(f"Capture choices needed: {', '.join(pending)} (run 'shadow consent wizard')")
 
     # Database info
     db_path = get_db_path()
@@ -1179,7 +1191,19 @@ def do_config(args):
     action = getattr(args, "config_action", None)
 
     if action == "set":
-        cfg.set(args.key, args.value)
+        from latticeshadow import consent
+
+        surface = next(
+            (name for name, spec in consent.SURFACES.items() if spec["config_key"] == args.key),
+            None,
+        )
+        if surface:
+            value = args.value.lower()
+            if value not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
+                raise SystemExit("Use on|off for a capture, listener, or sync setting.")
+            consent.set_consent(surface, value in ("on", "true", "yes", "1"))
+        else:
+            cfg.set(args.key, args.value)
         print(f"Set {args.key} = {args.value}")
         # Show auto-model if it was set
         if args.key == "memory.provider":
@@ -2044,7 +2068,7 @@ def main():
         description="LatticeShadow — Private Local-First Memory Companion",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""commands:
-  search <query>  Search your clipboard history semantically
+  search <query>  Search saved memories semantically
   paste  <query>  Search and copy the #1 result back to clipboard
   watch           Live stream of clipboard captures (Ctrl+C to stop)
   status          Check daemon and database status
