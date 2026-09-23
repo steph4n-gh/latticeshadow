@@ -95,9 +95,10 @@ SHELL_MARKER = "# LATTICESHADOW_SHELL_OPT_IN"
 def get_or_create_master_key() -> str:
     """
     Resolve the master key using a 3-tier waterfall:
-    1. macOS Keychain (preferred, hardware-backed on Apple Silicon via Secure Enclave)
+    1. macOS Keychain (hardware-backed when Secure Enclave key creation succeeds)
     2. Flat file at ~/.latticeshadow/.key (backward compatibility)
-    3. Generate new key → store in both Keychain and flat file (Enclave-wrapped)
+    3. Generate new key → store in both Keychain and flat file (keypair-wrapped
+       when available; the keypair may be software-backed)
     """
     import base64
     import hashlib
@@ -132,7 +133,7 @@ def get_or_create_master_key() -> str:
                     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                     with os.fdopen(fd, "w") as f:
                         f.write(wrapped)
-                    print("\u2713 Migrated legacy master key to Secure Enclave wrapped key.")
+                    print("\u2713 Migrated legacy master key to a Keychain keypair-wrapped key.")
                     return stored
     except Exception:
         pass
@@ -159,18 +160,18 @@ def get_or_create_master_key() -> str:
                 fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 with os.fdopen(fd, "w") as f:
                     f.write(wrapped)
-                print("\u2713 Migrated flat-file legacy master key to Secure Enclave wrapped key.")
+                print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 return stored
 
     # 3. Generate new key
     raw_key = hashlib.sha256(os.urandom(64)).hexdigest()
     try:
         wrapped_key = wrap_and_encode(raw_key)
-        enclave_wrapped = True
+        keypair_wrapped = True
     except Exception:
         # Keep the legacy fallback, but report its actual protection level.
         wrapped_key = raw_key
-        enclave_wrapped = False
+        keypair_wrapped = False
         
     try:
         keychain.store_key(wrapped_key)
@@ -181,7 +182,7 @@ def get_or_create_master_key() -> str:
     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(wrapped_key)
-    print(f"\u2713 Generated master key at {key_file} (Secure Enclave wrapped: {enclave_wrapped})")
+    print(f"\u2713 Generated master key at {key_file} (Keychain keypair wrapped: {keypair_wrapped})")
     return raw_key
 
 

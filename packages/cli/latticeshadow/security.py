@@ -200,18 +200,18 @@ def _get_private_key(label: str):
     return None
 
 def encrypt_with_secure_enclave(label: str, plaintext: bytes) -> bytes:
-    """Encrypt a payload using the Secure Enclave key pair's public key."""
+    """Encrypt with a Keychain keypair, Secure Enclave-backed when available."""
     priv_key = _get_private_key(label)
     if not priv_key:
         if not generate_secure_enclave_key(label):
-            raise RuntimeError("Failed to resolve or generate Secure Enclave key.")
+            raise RuntimeError("Failed to resolve or generate a Keychain keypair.")
         priv_key = _get_private_key(label)
         if not priv_key:
             raise RuntimeError("Failed to retrieve newly generated private key.")
             
     pub_key = sec.SecKeyCopyPublicKey(priv_key)
     if not pub_key:
-        raise RuntimeError("Failed to extract public key from Enclave key.")
+        raise RuntimeError("Failed to extract public key from Keychain keypair.")
         
     plaintext_data = cf.CFDataCreate(None, plaintext, len(plaintext))
     alg_str = cfstr(ALGORITHM)
@@ -224,12 +224,12 @@ def encrypt_with_secure_enclave(label: str, plaintext: bytes) -> bytes:
         ctypes.byref(error)
     )
     if not cipher_cf:
-        raise RuntimeError(f"Enclave encryption failed: {error.value}")
+        raise RuntimeError(f"Keychain keypair encryption failed: {error.value}")
         
     return cfdata_to_bytes(cipher_cf)
 
 def decrypt_with_secure_enclave(label: str, ciphertext: bytes) -> bytes:
-    """Decrypt a payload using the Secure Enclave private key."""
+    """Decrypt with the matching Keychain private key."""
     priv_key = _get_private_key(label)
     if not priv_key:
         raise RuntimeError(f"Private key not found for label: {label}")
