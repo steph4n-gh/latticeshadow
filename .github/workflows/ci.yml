@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,11 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run_macos: ${{ steps.changes.outputs.run_macos }}
+      run_model: ${{ steps.changes.outputs.run_model }}
+      run_swift: ${{ steps.changes.outputs.run_swift }}
+      run_bundle: ${{ steps.changes.outputs.run_bundle }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: Check whether macOS tests are needed
+      - name: Select macOS checks
         id: changes
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -33,19 +37,14 @@ jobs:
           else
             base="$PUSH_BEFORE"
           fi
-          if [[ ! "$base" =~ ^[0-9a-f]{40}$ ]] || [[ "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}"; then
-            echo "run_macos=true" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_TYPE" == tag || "$EVENT_NAME" == workflow_dispatch ]] ||
+             [[ ! "$base" =~ ^[0-9a-f]{40}$ ]] || [[ "$base" =~ ^0+$ ]] ||
+             ! git cat-file -e "$base^{commit}"; then
+            python3 scripts/validation/ci_paths.py --candidate < /dev/null >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          run_macos=false
           git diff --name-only -z "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/changed-files"
-          while IFS= read -r -d '' path; do
-            case "$path" in
-              *.md) ;;
-              *) run_macos=true; break ;;
-            esac
-          done < "$RUNNER_TEMP/changed-files"
-          echo "run_macos=$run_macos" >> "$GITHUB_OUTPUT"
+          python3 scripts/validation/ci_paths.py < "$RUNNER_TEMP/changed-files" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -54,6 +53,7 @@ jobs:
             requirements-dev.txt
             packages/db/pyproject.toml
       - run: make setup-db
+      - run: python3 -m unittest discover -s scripts/validation -p 'test_ci_paths.py'
       - run: make test-db
       - run: .venv/bin/python packages/db/scripts/verify_docs.py
       - run: .venv/bin/python packages/cli/scripts/verify_docs.py --root .
@@ -61,7 +61,7 @@ jobs:
   macos:
     needs: database
     if: needs.database.outputs.run_macos == 'true'
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -72,7 +72,52 @@ jobs:
             requirements-dev.txt
             packages/db/pyproject.toml
             packages/cli/pyproject.toml
+      - uses: actions/cache@v4
+        if: needs.database.outputs.run_model == 'true' || needs.database.outputs.run_bundle == 'true'
+        with:
+          path: ~/.cache/huggingface/hub/models--sentence-transformers--static-retrieval-mrl-en-v1
+          key: static-retrieval-mrl-en-v1-f60985c706f192d45d218078e49e5a8b6f15283a-${{ runner.os }}-${{ runner.arch }}
       - run: make setup
       - run: make test-cli
-      - run: make test-model
-      - run: env -u SDKROOT xcrun swift build --package-path packages/cli/native -c release
+      - name: Real model checks
+        if: needs.database.outputs.run_model == 'true'
+        run: make test-model
+      - name: Swift companion build
+        if: needs.database.outputs.run_swift == 'true'
+        run: env -u SDKROOT xcrun swift build --package-path packages/cli/native -c release
+      - name: Build app candidate
+        if: needs.database.outputs.run_bundle == 'true'
+        run: |
+          .venv/bin/python -m pip install -e './packages/cli[build]'
+          .venv/bin/python packages/cli/packaging/setup_app.py py2app
+      - name: Verify bundled app
+        if: needs.database.outputs.run_bundle == 'true'
+        run: python3 scripts/validation/verify_app.py dist/LatticeShadow.app > app-report.json
+      - uses: actions/upload-artifact@v4
+        if: needs.database.outputs.run_bundle == 'true'
+        with:
+          name: latticeshadow-bundle-report-${{ github.sha }}
+          path: app-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  required:
+    needs: [database, macos]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all selected jobs
+        env:
+          DATABASE_RESULT: ${{ needs.database.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          RUN_MACOS: ${{ needs.database.outputs.run_macos }}
+        run: |
+          test "$DATABASE_RESULT" = success
+          if [[ "$RUN_MACOS" == true ]]; then
+            test "$MACOS_RESULT" = success
+          else
+            case "$MACOS_RESULT" in
+              success|skipped) ;;
+              *) exit 1 ;;
+            esac
+          fi

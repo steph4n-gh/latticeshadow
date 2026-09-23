@@ -9,6 +9,10 @@ Writes TOML manually (no tomli-w dependency needed for flat configs).
 import os
 import sys
 import copy
+import json
+import tempfile
+import fcntl
+from contextlib import contextmanager
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -41,6 +45,14 @@ DEFAULTS = {
         "clipboard": False,
         "terminal_history": False,
         "ambient_context": False,
+        "paused": False,
+        "terminal_history_epoch": 0,
+        "clipboard_epoch": 0,
+        "excluded_sources": [],
+        "excluded_literals": [],
+    },
+    "retention": {
+        "days": 0,                  # zero disables automatic age-based deletion
     },
     "sync": {
         "icloud_sync": False,
@@ -65,6 +77,10 @@ DEFAULTS = {
         "test_command": "pytest",
         "idle_threshold_seconds": 300,
         "max_daily_llm_requests": 50,
+    },
+    "experimental": {
+        "immune_scan": False,
+        "semantic_swapper": False,
     },
     "consent": {
         "completed": False,
@@ -105,6 +121,21 @@ def load_config() -> dict:
     return _deep_merge(DEFAULTS, config)
 
 
+@contextmanager
+def mutation_lock():
+    """Serialize config read/modify/write across the CLI, menu and daemon."""
+    os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
+    fd = os.open(os.path.join(LOG_DIR, "config.lock"),
+                 os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def get_data_dir() -> str:
     """Keep live vault data local, including when encrypted iCloud sync is enabled."""
     icloud_dir = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/LatticeShadow")
@@ -133,16 +164,30 @@ def get_data_dir() -> str:
 
 
 def save_config(config: dict) -> None:
-    """Write config dict to ~/.latticeshadow/config.toml."""
+    """Atomically write config so a crash cannot truncate capture choices."""
     os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
     lines = []
     _write_toml(config, lines, depth=0)
-    with open(CONFIG_PATH, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    payload = "\n".join(lines) + "\n"
+    fd, temporary = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=LOG_DIR)
     try:
-        os.chmod(CONFIG_PATH, 0o600)
-    except Exception:
-        pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, CONFIG_PATH)
+        try:
+            directory_fd = os.open(LOG_DIR, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _write_toml(data: dict, lines: list, depth: int, prefix: str = "") -> None:
@@ -171,9 +216,11 @@ def _toml_value(value) -> str:
     elif isinstance(value, float):
         return str(value)
     elif isinstance(value, str):
-        return f'"{value}"'
+        return json.dumps(value, ensure_ascii=False)
+    elif isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     else:
-        return f'"{value}"'
+        raise TypeError(f"Unsupported TOML value: {type(value).__name__}")
 
 
 def get(key: str) -> str | int | bool | None:
@@ -198,6 +245,11 @@ def set(key: str, value: str) -> None:
     Example: set("memory.provider", "gemini")
     Automatically sets default model when provider changes.
     """
+    with mutation_lock():
+        _set_locked(key, value)
+
+
+def _set_locked(key: str, value: str) -> None:
     config = load_config()
     parts = key.split(".")
 
@@ -211,7 +263,25 @@ def set(key: str, value: str) -> None:
     # Type coercion based on defaults
     final_key = parts[-1]
     default_val = _get_default(key)
-    if isinstance(default_val, bool):
+    if key in ("inputs.excluded_sources", "inputs.excluded_literals"):
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            raise ValueError(f"{key} must be a JSON array of strings") from exc
+        if (not isinstance(parsed, list) or len(parsed) > 100 or
+                any(not isinstance(item, str) or not item or
+                    len(item.encode("utf-8")) > 256 for item in parsed)):
+            raise ValueError(f"{key} must contain at most 100 nonempty strings, each at most 256 bytes")
+        current[final_key] = parsed
+    elif key == "retention.days":
+        try:
+            days = int(value)
+        except ValueError as exc:
+            raise ValueError("retention.days must be a nonnegative integer") from exc
+        if not 0 <= days <= 36500:
+            raise ValueError("retention.days must be between 0 and 36500")
+        current[final_key] = days
+    elif isinstance(default_val, bool):
         current[final_key] = value.lower() in ("true", "1", "yes")
     elif isinstance(default_val, int):
         try:
@@ -220,6 +290,15 @@ def set(key: str, value: str) -> None:
             current[final_key] = value
     else:
         current[final_key] = value
+
+    # Low-level config writes are also used by migrations and tests. Keep
+    # capture transitions visible to a daemon even if off/on falls between polls.
+    if key in {"inputs.clipboard", "inputs.terminal_history", "inputs.paused"}:
+        inputs = config.setdefault("inputs", {})
+        if key in {"inputs.clipboard", "inputs.paused"}:
+            inputs["clipboard_epoch"] = int(inputs.get("clipboard_epoch", 0)) + 1
+        if key in {"inputs.terminal_history", "inputs.paused"}:
+            inputs["terminal_history_epoch"] = int(inputs.get("terminal_history_epoch", 0)) + 1
 
     # Auto-set default model when provider changes
     if key == "memory.provider" and value in DEFAULT_MODELS:

@@ -243,12 +243,30 @@ class Collection:
 
         return ids
 
+    def get_records(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Return stored canonical rows; encrypted text remains encrypted here."""
+        return self._store.get_records(ids)
+
+    def scan_records(self, *, after_row_id: int = 0, limit: int = 500):
+        return self._store.scan_records(after_row_id=after_row_id, limit=limit)
+
+    def revision(self) -> int:
+        return self._store.revision()
+
+    def repair_status(self) -> Dict[str, Any]:
+        """Report a committed record whose derived index still needs repair."""
+        return self._store.repair_status()
+
+    def mark_repair_needed(self, error: str) -> None:
+        self._store.mark_repair_needed(error)
+
     # ── Search ─────────────────────────────────────────────────────────────
 
     def search(self, query: str, n_results: int = 10,
                where: Optional[Dict[str, Any]] = None,
                temperature: float = 0.0,
-               hybrid: bool = False) -> SearchResult:
+               hybrid: bool = False,
+               candidate_ids: Optional[List[str]] = None) -> SearchResult:
         """
         Semantic search over stored documents.
 

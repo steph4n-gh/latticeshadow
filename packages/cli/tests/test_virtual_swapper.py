@@ -21,7 +21,8 @@ class TestVirtualSwapper:
         used = daemon.get_swap_used_mb()
         assert used == 512.00
 
-    def test_check_app_transition(self):
+    @patch("latticeshadow.consent.surface_enabled", return_value=True)
+    def test_check_app_transition(self, _surface_enabled):
         # Mock AppKit NSWorkspace
         import AppKit
         mock_ws = MagicMock()
@@ -59,6 +60,17 @@ class TestVirtualSwapper:
         args, kwargs = vault.add.call_args
         assert kwargs["metadatas"][0]["app"] == "Google Chrome"
         assert kwargs["metadatas"][0]["type"] == "swap_page"
+
+    @patch("latticeshadow.consent.surface_enabled", return_value=False)
+    def test_revoked_snapshot_does_not_read_or_store_app_text(self, _surface_enabled):
+        vault = MagicMock()
+        daemon = SemanticSwapperDaemon(vault=vault)
+        daemon.query_app_text = MagicMock(return_value={"text": "private app text"})
+
+        daemon.snapshot_app_to_vault("TextEdit")
+
+        daemon.query_app_text.assert_not_called()
+        vault.add.assert_not_called()
 
     @patch("latticeshadow.shadow_cli.get_vault")
     @patch("subprocess.run")

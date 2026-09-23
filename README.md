@@ -8,8 +8,9 @@ redacted view through a local MCP server. LatticeShadow combines a reusable
 SQLite vector store with a macOS client.
 
 This is a **development prototype**, not a finished clipboard app or a security
-product. The basic local workflow works; installation, capture, desktop UI, and
-the experimental features still need more real-world validation. The
+product. The daily-use alpha is being validated; integrated tests and selected
+desktop and guest-install checks pass, while its current-revision two-hour soak and public-binary
+release gates remain open. The
 [capability guide](docs/CAPABILITIES.md) says exactly where the edges are.
 
 ## First run on macOS
@@ -34,7 +35,9 @@ under `~/.latticeshadow` by default. `make setup` does **not** start background
 capture or edit your shell startup files. The daemon shows as stopped after a
 manual save; that is expected, not a tiny rebellion.
 
-For the slower, more explanatory version, see [Getting started](docs/GETTING_STARTED.md).
+For the complete tour and command reference, read the
+[user manual](docs/USER_MANUAL.md) ([print-ready edition](docs/USER_MANUAL.html)).
+The shorter path is [Getting started](docs/GETTING_STARTED.md).
 If you only want the cross-platform DB package, use `make setup-db` instead;
 the macOS client is not installed on Linux.
 
@@ -42,12 +45,12 @@ the macOS client is not installed on Linux.
 
 | Area | Current state |
 | --- | --- |
-| Manual memory | `shadow remember`, timeline, search, summary, and explicit forget are implemented and tested with disposable data. Recall quality has a small labeled test set; broader evaluation is needed. |
-| Background capture | macOS clipboard and terminal capture start only after explicit source choices and `shadow enable`. Automated tests exist; broader desktop validation is still needed. |
-| Assistant access | `shadow mcp serve` implements a stdio MCP server with redacted recall and other tools. End-to-end use with a real MCP client is still on the backlog. |
+| Manual memory | `shadow remember`, scoped timeline and search, project assignment, and explicit forget are implemented and tested with disposable data. [Integrated synthetic recall](docs/validation/recall-local.md) passed its top-five target; the [current packaged-app 10,000-event Mini run](docs/validation/packaged-app-20669ff-2026-09-23.md) met the latency target. Cold model startup takes longer. |
+| Background capture | macOS clipboard and terminal capture require explicit source choices and `shadow enable`. The [current packaged app excluded a pre-enable value, captured a later synthetic copy, and kept pause and source choices across an ordinary guest reboot](docs/validation/packaged-app-20669ff-2026-09-23.md); literal/source exclusions and optional age retention are implemented. Stock first-launch behavior remains to be checked. |
+| Assistant access | Local project/source grants restrict a read-only stdio MCP server. An independent MCP SDK test and a synthetic Codex CLI host walkthrough pass. See the [sharing guide](docs/MCP.md). |
 | Database | `latticeshadow-db` installs independently and supports document/vector storage, metadata, retrieval, and optional research indexes. |
-| Desktop and peer features | The menu-bar UI, cross-device sync, autonomous repair, and several retrieval modes are experimental. They are not the recommended first run. |
-| Distribution | GitHub releases contain source archives. There are no installable wheels or packaged native companion yet. |
+| Desktop and peer features | The earlier [full logged-in GUI journey](docs/validation/desktop-gui.md) passed menu, Recall, filters, preview, Copy, file Open, assignment, and confirmed Forget. The [keyboard-fixed ZIP](docs/validation/packaged-app-14aa7a3-2026-09-23.md) then passed focused-row Return and keypad Enter copying in a stripped guest. Cross-app shortcut behavior remains unproven. Cross-device sync, autonomous repair, and several retrieval modes remain experimental. |
+| Distribution | Source releases are public. The earlier unsigned Apple Silicon ZIP passed [packaged recall, query timing, fresh-guest recovery, and explicit daemon/reboot/removal checks](docs/validation/packaged-app-20669ff-2026-09-23.md) plus a [logged-in GUI journey](docs/validation/desktop-gui.md). The [keyboard-fixed ZIP](docs/validation/packaged-app-14aa7a3-2026-09-23.md) passed its bundle verifier, offline recall, and installed keyboard check. Populated 0.1 upgrade remains unverified after an ad-hoc-signature Keychain access failure; stock Gatekeeper, signing, and notarization evidence remain open. |
 
 See [Capabilities and limits](docs/CAPABILITIES.md) for the evidence and privacy
 boundaries behind this table. The commands above require no LLM account.
@@ -84,13 +87,15 @@ document text, while IDs and metadata remain readable in SQLite. Its
 reversible vector rotation preserves similarity geometry, so rotated vectors
 are not opaque ciphertext. Key storage can fall back when platform protection
 is unavailable. Simulated P2P proofs are not zk-SNARKs. There has been no
-independent security review.
+external third-party security audit.
 
 iCloud sync writes encrypted packets while the live vault and keys stay local.
 Older installations that stored their live vault in iCloud need the
 [migration steps](docs/GETTING_STARTED.md) before restarting with sync enabled.
 
-`shadow forget` removes selected events from the active local indexes. It is not
+`shadow forget` removes selected events from the active local indexes.
+`shadow backup export` makes a portable passphrase-encrypted snapshot, and restore goes
+to a separate destination so an existing vault stays usable. Deletion is not
 a promise to erase old backups, synced copies, or every trace from a filesystem.
 Treat this as prototype software when choosing what to save.
 
@@ -108,7 +113,9 @@ for concrete acceptance criteria.
 
 | If you want to… | Read… |
 | --- | --- |
-| Try the CLI or opt into capture | [Getting started](docs/GETTING_STARTED.md) |
+| Learn the whole product, including recovery and command details | [User manual](docs/USER_MANUAL.md) or [print-ready edition](docs/USER_MANUAL.html) |
+| Try the CLI, backups, or opt into capture | [Getting started](docs/GETTING_STARTED.md) |
+| Share a chosen slice with an assistant | [MCP sharing guide](docs/MCP.md) |
 | Check a feature's maturity or data boundary | [Capabilities and limits](docs/CAPABILITIES.md) |
 | Understand the packages and data flow | [Architecture](docs/ARCHITECTURE.md) |
 | Browse all guides and research notes | [Documentation index](docs/README.md) |
@@ -129,8 +136,9 @@ make test-model   # downloads and evaluates the pinned model
 make docs
 ```
 
-CI runs DB tests and documentation checks on Linux. Changes beyond Markdown
-also run CLI tests, the model check, and the native build on macOS. Hardware
+CI runs DB tests and documentation checks on Linux. Its path selector runs the
+macOS CLI suite when client code changes, and adds model, native, or app-bundle
+checks when their inputs change. Documentation-only edits skip macOS. Hardware
 tests that may create temporary Keychain keys are separate: `make test-hardware`.
 Tags on tested `main` commits publish source-only GitHub releases without
 rerunning the macOS suite.

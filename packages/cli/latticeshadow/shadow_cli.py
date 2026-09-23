@@ -7,6 +7,10 @@ import plistlib
 import time
 import json
 import shlex
+import getpass
+import secrets
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
 from datetime import datetime
 
 # Ensure the parent directory is in sys.path to import latticeshadow_db
@@ -91,9 +95,10 @@ SHELL_MARKER = "# LATTICESHADOW_SHELL_OPT_IN"
 def get_or_create_master_key() -> str:
     """
     Resolve the master key using a 3-tier waterfall:
-    1. macOS Keychain (preferred, hardware-backed on Apple Silicon via Secure Enclave)
+    1. macOS Keychain (hardware-backed when Secure Enclave key creation succeeds)
     2. Flat file at ~/.latticeshadow/.key (backward compatibility)
-    3. Generate new key → store in both Keychain and flat file (Enclave-wrapped)
+    3. Generate new key → store in both Keychain and flat file (keypair-wrapped
+       when available; the keypair may be software-backed)
     """
     import base64
     import hashlib
@@ -113,6 +118,8 @@ def get_or_create_master_key() -> str:
             return None
 
     # 1. Try Keychain first
+    stored = None
+    keychain_lookup_failed = False
     try:
         stored = keychain.retrieve_key()
         if stored:
@@ -122,16 +129,21 @@ def get_or_create_master_key() -> str:
             else:
                 # Fallback check for legacy plaintext key
                 if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                    wrapped = wrap_and_encode(stored)
-                    keychain.store_key(wrapped)
-                    key_file = get_key_file()
-                    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(wrapped)
-                    print("\u2713 Migrated legacy master key to Secure Enclave wrapped key.")
+                    try:
+                        wrapped = wrap_and_encode(stored)
+                        keychain.store_key(wrapped)
+                        key_file = get_key_file()
+                        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(wrapped)
+                        print("\u2713 Migrated legacy master key to a Keychain keypair-wrapped key.",
+                              file=sys.stderr)
+                    except Exception:
+                        # Migration is optional when the valid legacy key is already available.
+                        pass
                     return stored
     except Exception:
-        pass
+        keychain_lookup_failed = True
 
     # 2. Fall back to flat file
     key_file = get_key_file()
@@ -139,45 +151,67 @@ def get_or_create_master_key() -> str:
         with open(key_file, "r") as f:
             stored = f.read().strip()
         if stored:
-            unwrapped = decode_and_unwrap(stored)
+            is_raw_key = len(stored) == 64 and all(c in "0123456789abcdef" for c in stored)
+            if keychain_lookup_failed and not is_raw_key:
+                raise PermissionError(
+                    "Existing master key could not be unlocked. The key file was left unchanged; "
+                    "try again from an unlocked macOS login session."
+                )
+            unwrapped = None if keychain_lookup_failed else decode_and_unwrap(stored)
             if unwrapped:
                 try:
                     keychain.store_key(stored)
                 except Exception:
                     pass
                 return unwrapped
-            elif len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                wrapped = wrap_and_encode(stored)
+            elif is_raw_key:
                 try:
-                    keychain.store_key(wrapped)
+                    if not keychain_lookup_failed:
+                        wrapped = wrap_and_encode(stored)
+                        keychain.store_key(wrapped)
+                        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(wrapped)
+                        print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.",
+                              file=sys.stderr)
                 except Exception:
+                    # Keep using the intact legacy file if wrapping is unavailable.
                     pass
-                fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w") as f:
-                    f.write(wrapped)
-                print("\u2713 Migrated flat-file legacy master key to Secure Enclave wrapped key.")
                 return stored
+        raise PermissionError(
+            "Existing master key could not be unlocked. The key file was left unchanged; "
+            "try again from an unlocked macOS login session."
+        )
+
+    # A lost or inaccessible Keychain entry must never turn an existing vault
+    # into a new-key vault. Do not replace a key that may still be recoverable.
+    if os.path.exists(get_db_path()) or stored or keychain_lookup_failed:
+        raise PermissionError(
+            "Existing vault or Keychain key cannot be unlocked. No new key was created; "
+            "check Keychain access from an unlocked macOS login session."
+        )
 
     # 3. Generate new key
     raw_key = hashlib.sha256(os.urandom(64)).hexdigest()
     try:
         wrapped_key = wrap_and_encode(raw_key)
-        enclave_wrapped = True
+        keypair_wrapped = True
     except Exception:
         # Keep the legacy fallback, but report its actual protection level.
         wrapped_key = raw_key
-        enclave_wrapped = False
+        keypair_wrapped = False
         
     try:
         keychain.store_key(wrapped_key)
-        print("\u2713 Stored master key in macOS Keychain.")
+        print("\u2713 Stored master key in macOS Keychain.", file=sys.stderr)
     except Exception:
         pass
         
     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(wrapped_key)
-    print(f"\u2713 Generated master key at {key_file} (Secure Enclave wrapped: {enclave_wrapped})")
+    print(f"\u2713 Generated master key at {key_file} (Keychain keypair wrapped: {keypair_wrapped})",
+          file=sys.stderr)
     return raw_key
 
 
@@ -187,13 +221,16 @@ def get_vault(create_if_missing=False):
     db_path = get_db_path()
     if not os.path.exists(db_path):
         if not create_if_missing:
-            print("Error: LatticeShadow database not found. Is the daemon running?")
-            print("  Run: shadow enable")
-            sys.exit(1)
+            raise SystemExit(
+                "LatticeShadow database not found. Save a note or run: shadow enable"
+            )
         os.makedirs(os.path.dirname(db_path), mode=0o700, exist_ok=True)
         os.chmod(os.path.dirname(db_path), 0o700)
 
-    master_key = get_or_create_master_key()
+    try:
+        master_key = get_or_create_master_key()
+    except PermissionError as exc:
+        raise SystemExit(str(exc)) from exc
 
     try:
         return open_main_vault(
@@ -202,9 +239,11 @@ def get_vault(create_if_missing=False):
             device=config.get_device(),
         )
     except PermissionError:
-        print("FATAL: The database has been crypto-shredded and is unrecoverable.")
-        print("  To start fresh, run: shadow remove && shadow install && shadow enable")
-        sys.exit(1)
+        raise SystemExit(
+            "Cannot decrypt the existing vault with the available master key. "
+            "Data was not changed. Check Keychain access in an unlocked macOS session; "
+            "if the key is truly lost, restore a portable backup into a new destination."
+        ) from None
     except ValueError as exc:
         if "embedding model" in str(exc):
             raise SystemExit("Stored vectors use an older embedding model. Run: shadow disable && shadow rebuild-index --yes") from exc
@@ -240,6 +279,8 @@ def _print_json(payload):
 # ── Core Commands ─────────────────────────────────────────────────────────────
 
 def do_search(query, paste_mode=False):
+    from latticeshadow.timeline import search_events
+
     try:
         vault = get_vault()
         if not vault or vault.count() == 0:
@@ -251,29 +292,29 @@ def do_search(query, paste_mode=False):
     if not paste_mode:
         print(f"Searching for '{query}'...")
     try:
-        res = vault.search(query, n_results=5, hybrid=True)
-        if not res or not res.documents:
+        events = search_events(vault, query, limit=5)
+        if not events:
             print("No matching memories found.")
             return
 
         if paste_mode:
             # Copy the top result back to the clipboard and exit
-            top_doc = res.documents[0]
+            top_doc = events[0]["text"]
             subprocess.run(["pbcopy"], input=top_doc.encode("utf-8"), check=True)
             # Truncate for display
             display = top_doc if len(top_doc) <= 120 else top_doc[:120] + "..."
             print(f"✓ Copied to clipboard: {display}")
             return
 
-        for i, doc in enumerate(res.documents):
-            score = res.scores[i] if hasattr(res, 'scores') and res.scores else 0.0
-            doc_id = res.ids[i] if hasattr(res, 'ids') and res.ids else ""
-            ts = _ts_from_doc_id(doc_id)
+        for i, event in enumerate(events):
+            doc = event["text"]
+            score = event.get("score", 0.0)
+            ts = event.get("timestamp", "")
             ts_str = f"  \033[90m({ts})\033[0m" if ts else ""
 
             # Truncate long entries for display
             display = doc if len(doc) <= 200 else doc[:200] + "..."
-            print(f"\n\033[96m--- Result {i+1} (Score: {score:.4f}){ts_str} ---\033[0m")
+            print(f"\n\033[96m--- Result {i+1} (ranking score: {score:.4f}){ts_str} ---\033[0m")
             print(display)
     except Exception as exc:
         raise SystemExit(f"Search failed: {exc}") from exc
@@ -351,7 +392,7 @@ def do_shred():
     db_path = get_db_path()
     shred_hot = hot_collection_exists(db_path)
 
-    print("\033[91mWARNING: You are about to crypto-shred your entire clipboard history.\033[0m")
+    print("\033[91mWARNING: You are about to crypto-shred your entire local memory vault, including notes, terminal records, and captured clipboard entries.\033[0m")
     print("This action is IRREVERSIBLE. The encryption keys will be destroyed.")
     confirm = input("Type 'SHRED' to confirm: ")
     if confirm.strip() == "SHRED":
@@ -367,12 +408,18 @@ def do_shred():
                 hot_vault.crypto_shred()
             except Exception as e:
                 print(f"Warning: Hot index shred failed: {e}")
-        # Also destroy the Keychain entry
+        # Report Keychain deletion separately; a locked login keychain can
+        # refuse it after the vault itself has already been shredded.
         try:
-            keychain.delete_key()
-        except Exception:
-            pass
-        print("\033[92mSUCCESS\033[0m: Keys zeroed. Database scrambled. Keychain entry destroyed. History destroyed.")
+            keychain_removed = keychain.delete_key()
+        except Exception as exc:
+            keychain_result = f"Warning: Keychain entry could not be removed: {exc}"
+        else:
+            keychain_result = (
+                "Keychain entry removed." if keychain_removed else "No Keychain entry was found."
+            )
+        print("\033[92mSUCCESS\033[0m: Vault crypto-shred completed.")
+        print(keychain_result)
     else:
         print("Aborted.")
 
@@ -384,13 +431,16 @@ def do_sleep():
     vault.consolidate()
     count_after = vault.count()
     print(f"Consolidation complete: {count_before} → {count_after} entries.")
-    # Run LLM dream enrichment if configured
-    try:
-        from latticeshadow.dreamer import dream_cycle
-        dream_cycle(vault)
-        print("Dream enrichment complete.")
-    except Exception as e:
-        print(f"Dream enrichment skipped: {e}")
+    # Run LLM dream enrichment only when a provider was selected explicitly.
+    if config.get("memory.provider") in (None, "none"):
+        print("Dream enrichment skipped: no LLM provider selected.")
+    else:
+        try:
+            from latticeshadow.dreamer import dream_cycle
+            dream_cycle(vault)
+            print("Dream enrichment pass finished; check any warnings for skipped entries.")
+        except Exception as e:
+            print(f"Dream enrichment skipped: {e}")
 
 
 def do_watch():
@@ -429,6 +479,14 @@ def _get_python_path():
 
 def _get_daemon_path():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), 'shadowd.py'))
+
+
+def _daemon_argv():
+    if ".app/Contents/MacOS/" in sys.executable:
+        # py2app sets sys.executable to its bundled python helper even when the
+        # user entered through LatticeShadow. launchd needs the app entry point.
+        return [str(Path(sys.executable).parent / "LatticeShadow"), "--daemon"]
+    return [_get_python_path(), _get_daemon_path()]
 
 def _configure_shell(enable: bool) -> None:
     """Manage only LatticeShadow's marked shell lines."""
@@ -481,6 +539,83 @@ def do_rebuild_index(args):
         print(f"Database backup (keep private): {backup}")
 
 
+def _backup_passphrase(args, *, confirm=False):
+    if args.passphrase_fd is not None:
+        if args.passphrase_fd < 0:
+            raise ValueError("Passphrase descriptor must be nonnegative")
+        with os.fdopen(os.dup(args.passphrase_fd), "r", encoding="utf-8") as stream:
+            value = stream.readline(4097).rstrip("\r\n")
+    else:
+        value = getpass.getpass("Backup passphrase: ")
+        if confirm and value != getpass.getpass("Repeat backup passphrase: "):
+            raise ValueError("Backup passphrases do not match")
+    if not 8 <= len(value) <= 4096:
+        raise ValueError("Backup passphrase must contain 8 to 4096 characters")
+    return value
+
+
+def _restored_vault(destination: Path):
+    key_file = destination / ".key"
+    db_file = destination / "shadow.sqlite"
+    if not db_file.is_file() or not key_file.is_file() or key_file.is_symlink():
+        raise ValueError("Destination must contain shadow.sqlite and a private .key")
+    if key_file.stat().st_mode & 0o077:
+        raise PermissionError("Restored key permissions must be 0600")
+    key = key_file.read_text(encoding="ascii").strip()
+    if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
+        raise ValueError("Restored destination key is invalid")
+    return open_main_vault(str(db_file), key, device=config.get_device())
+
+
+def do_backup(args):
+    """Export or inspect a portable recovery destination without changing live state."""
+    from latticeshadow.backup import export_backup, restore_backup
+
+    if args.backup_command == "export":
+        result = export_backup(get_vault(), args.archive, _backup_passphrase(args, confirm=True))
+        print(f"Encrypted backup created: {args.archive} ({result['records']} event(s)).")
+        return
+    destination = Path(args.destination).expanduser().absolute()
+    if args.backup_command == "inspect":
+        vault = _restored_vault(destination)
+        from latticeshadow.timeline import fetch_events
+        sample = fetch_events(vault, limit=3)["events"]
+        print(f"Restored vault verified: {vault.count()} event(s) at {destination}")
+        for event in sample:
+            print(f"  {event['id']}  {event['timestamp']}  {event['source']}")
+        print("Capture remains disabled for this recovery destination.")
+        return
+    if args.backup_command != "restore":
+        raise ValueError("Choose backup export, restore, or inspect")
+    if destination.exists():
+        raise FileExistsError(f"Restore destination already exists: {destination}")
+    passphrase = _backup_passphrase(args)
+    destination.mkdir(mode=0o700)
+    try:
+        key = secrets.token_hex(32)
+        result = restore_backup(args.archive, destination / "shadow.sqlite", passphrase, key)
+        fd = os.open(destination / ".key", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as stream:
+            stream.write(key + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        vault = _restored_vault(destination)
+        if vault.count() != result["records"]:
+            raise RuntimeError("Restored vault failed count verification")
+    except Exception:
+        for item in destination.iterdir():
+            if item.is_file():
+                item.unlink()
+        destination.rmdir()
+        raise
+    print(f"Restored and verified {result['records']} event(s) at {destination}.")
+    print("Capture, sharing, and synchronization remain disabled for this destination.")
+    print(f"Inspect again with: shadow backup inspect --destination {shlex.quote(str(destination))}")
+    print("To activate on a fresh macOS profile with no LatticeShadow vault or Keychain key,")
+    print("copy shadow.sqlite and .key into ~/.latticeshadow, then run shadow install,")
+    print("shadow consent wizard, and shadow enable. Do not replace an existing vault.")
+
+
 def _set_launch_agent_enabled(enabled: bool) -> None:
     action = "enable" if enabled else "disable"
     service = f"gui/{os.getuid()}/{PLIST_LABEL}"
@@ -501,16 +636,13 @@ def do_install():
     os.makedirs(log_dir, mode=0o700, exist_ok=True)
     os.chmod(log_dir, 0o700)
 
-    python_path = _get_python_path()
-    daemon_path = _get_daemon_path()
-
     # Generate master key on first install
     get_or_create_master_key()
 
     # Write launchd plist
     plist = {
         "Label": PLIST_LABEL,
-        "ProgramArguments": [python_path, daemon_path],
+        "ProgramArguments": _daemon_argv(),
         "RunAtLoad": True,
         # A normal shutdown or an integrity refusal must stay stopped.
         "KeepAlive": {"SuccessfulExit": False},
@@ -570,22 +702,6 @@ def do_enable():
             _local_model()
         except Exception as exc:
             raise SystemExit(f"Cannot start capture until the local embedding model loads: {exc}") from exc
-    service = None
-    try:
-        import ServiceManagement
-        if ".app/Contents/MacOS" in sys.executable:
-            service = ServiceManagement.SMAppService.mainAppService()
-    except Exception:
-        pass
-
-    if service:
-        success, error = service.registerAndReturnError_(None)
-        if success:
-            print("✓ LatticeShadow registered as login item via SMAppService.")
-            return
-        else:
-            print(f"Warning: SMAppService registration failed: {error}. Falling back to launchd plist.")
-
     if not os.path.exists(PLIST_PATH):
         raise SystemExit("Error: plist not found. Run 'shadow install' first.")
     subprocess.run(["launchctl", "unload", PLIST_PATH],
@@ -602,22 +718,6 @@ def do_enable():
 
 
 def do_disable():
-    service = None
-    try:
-        import ServiceManagement
-        if ".app/Contents/MacOS" in sys.executable:
-            service = ServiceManagement.SMAppService.mainAppService()
-    except Exception:
-        pass
-
-    if service:
-        success, error = service.unregisterAndReturnError_(None)
-        if success:
-            print("✓ LatticeShadow unregistered from login items via SMAppService.")
-            return
-        else:
-            print(f"Warning: SMAppService unregistration failed: {error}.")
-
     if os.path.exists(PLIST_PATH):
         _set_launch_agent_enabled(False)
         result = subprocess.run(["launchctl", "unload", PLIST_PATH], capture_output=True, text=True)
@@ -662,25 +762,25 @@ def do_remove():
 
 
 def do_status():
-    from latticeshadow import consent
+    from latticeshadow.capture_state import get_status
 
-    # Check if daemon is running via launchctl
-    res = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
-    is_running = False
-    for line in res.stdout.splitlines():
-        if PLIST_LABEL in line:
-            parts = line.split()
-            if len(parts) >= 3:
-                is_running = parts[0] != "-"
-            else:
-                is_running = True
-            break
-
-    if is_running:
+    status = get_status()
+    if status["daemon_running"] is True:
         print("Daemon:   \033[92m● RUNNING\033[0m")
-    else:
+    elif status["daemon_running"] is False:
         print("Daemon:   \033[91m● STOPPED\033[0m")
-    pending = consent.pending_capture_sources()
+    else:
+        print("Daemon:   ● UNKNOWN")
+    if status["paused"]:
+        print("Capture:  PAUSED (run 'shadow resume' to resume selected sources)")
+    elif status["state"] == "capturing":
+        active = ", ".join(name for name, item in status["sources"].items() if item["capturing"])
+        print(f"Capture:  {active}")
+    elif status["state"] == "idle":
+        print("Capture:  No sources enabled")
+    if status["error"]:
+        print(f"Status:   {status['error']}")
+    pending = status["consent_needed"]
     if pending:
         print(f"Capture choices needed: {', '.join(pending)} (run 'shadow consent wizard')")
 
@@ -693,7 +793,7 @@ def do_status():
             import sqlite3
             conn = sqlite3.connect(db_path, timeout=5.0)
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM vectors")
+            cursor.execute("SELECT COUNT(*) FROM vectors WHERE collection = 'clipboard'")
             count = cursor.fetchone()[0]
             conn.close()
             print(f"Entries:  {count}")
@@ -702,10 +802,33 @@ def do_status():
     else:
         print("Database: Not initialized yet.")
 
+    days = config.get("retention.days") or 0
+    print(f"Retention: {days} day(s)" if days else "Retention: Off")
+    sources = config.get("inputs.excluded_sources") or []
+    literals = config.get("inputs.excluded_literals") or []
+    print(f"Exclusions: {len(sources)} source(s), {len(literals)} literal rule(s)")
+
     # Log file
     log_path = os.path.join(get_log_dir(), "shadowd.log")
     if os.path.exists(log_path):
         print(f"Log:      {log_path}")
+
+
+def do_pause():
+    from latticeshadow.consent import set_paused
+
+    set_paused(True)
+    print("Capture paused. Your source choices are preserved.")
+
+
+def do_resume():
+    from latticeshadow.consent import set_paused
+
+    try:
+        set_paused(False)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print("Capture resumed for enabled sources.")
 
 
 # ── Memory Timeline Commands ─────────────────────────────────────────────────
@@ -734,21 +857,30 @@ def do_timeline(args):
     from latticeshadow.timeline import fetch_events, search_events, summarize_events
 
     vault = get_vault()
+    scope = {
+        "projects": ([None] if args.unassigned else [args.project]
+                     if args.project is not None else None),
+        "sources": [args.source] if args.source else None,
+        "since": args.since,
+        "until": args.until,
+    }
     if args.query:
-        events = search_events(vault, args.query, limit=args.limit)
+        if args.cursor:
+            raise SystemExit("--cursor is available for recent timeline pages only")
+        events = search_events(vault, args.query, scope=scope, limit=args.limit)
+        next_cursor = None
     else:
-        events = fetch_events(
-            vault,
-            limit=args.limit,
-            source=args.source,
-            since=args.since,
-            until=args.until,
-        )
+        page = fetch_events(vault, scope=scope, limit=args.limit, cursor=args.cursor)
+        events = page["events"]
+        next_cursor = page["next_cursor"]
 
     if args.json:
-        _print_json({"summary": summarize_events(events), "events": events})
+        _print_json({"summary": summarize_events(events), "events": events,
+                     "next_cursor": next_cursor})
         return
     _print_event_lines(events)
+    if next_cursor:
+        print(f"Next cursor (repeat the same filters): {next_cursor}")
 
 
 def do_remember(args):
@@ -761,8 +893,15 @@ def do_remember(args):
         except json.JSONDecodeError as exc:
             print(f"Invalid metadata JSON: {exc}")
             return
+        if not isinstance(metadata, dict):
+            raise SystemExit("--metadata must be a JSON object")
     vault = get_vault(create_if_missing=True)
-    doc_id = add_event(vault, args.event_type, args.text, metadata=metadata, doc_id=args.id)
+    doc_id = add_event(
+        vault, args.event_type, args.text,
+        source=args.source or args.event_type,
+        timestamp=args.timestamp, project=args.project,
+        metadata=metadata, doc_id=args.id,
+    )
     try:
         from latticeshadow.audit_log import append_audit_event
 
@@ -780,13 +919,24 @@ def do_remember(args):
     print(doc_id)
 
 
+def do_assign_project(args):
+    """Attach an explicit project label to selected existing events."""
+    from latticeshadow.timeline import assign_project
+
+    changed = assign_project(
+        get_vault(), list(dict.fromkeys(args.id)),
+        None if args.unassigned else args.project,
+    )
+    print(f"Updated project for {changed} memory event(s).")
+
+
 def do_why(args):
     """Explain why a query is relevant by showing matching memory context."""
     from latticeshadow.timeline import fetch_events, format_event, search_events
 
     vault = get_vault()
     matches = search_events(vault, args.query, limit=args.limit)
-    recent = fetch_events(vault, limit=min(5, args.limit))
+    recent = fetch_events(vault, limit=min(5, args.limit))["events"]
 
     if not matches:
         print("No matching memory events found.")
@@ -807,7 +957,8 @@ def do_summarize(args):
     from latticeshadow.timeline import fetch_events, search_events
 
     vault = get_vault()
-    events = search_events(vault, args.query, limit=args.limit) if args.query else fetch_events(vault, limit=args.limit)
+    events = (search_events(vault, args.query, limit=args.limit) if args.query
+              else fetch_events(vault, limit=args.limit)["events"])
     payload = summarize_memory_events(events, prefer_foundation=not args.no_foundation)
     if args.json:
         _print_json({**payload, "events": events[:5]})
@@ -824,11 +975,20 @@ def do_open_context(args):
     for event in events:
         target = open_target(event)
         if target:
+            parsed = urlsplit(target)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                action = ["open", target]
+            elif parsed.scheme == "file" and parsed.netloc in ("", "localhost"):
+                action = ["open", "-R", unquote(parsed.path)]
+            elif not parsed.scheme and os.path.isabs(target):
+                action = ["open", "-R", target]
+            else:
+                continue
             print(target)
             if not args.dry_run:
-                subprocess.run(["open", target], check=False)
+                subprocess.run(action, check=False)
             return
-    print("No openable URL or file path found for that query.")
+    print("No supported web URL or absolute local file path found for that query.")
 
 
 def do_forget(args):
@@ -838,11 +998,19 @@ def do_forget(args):
     vault = get_vault()
     ids = list(args.id or [])
     selected_events = []
+    scope = {
+        "projects": ([None] if getattr(args, "unassigned", False)
+                     else [args.project] if getattr(args, "project", None) is not None
+                     else None),
+        "sources": [args.source] if args.source else None,
+        "since": getattr(args, "since", None),
+        "until": getattr(args, "until", None),
+    }
 
     if args.query:
-        selected_events.extend(search_events(vault, args.query, limit=args.limit))
-    elif args.source:
-        selected_events.extend(fetch_events(vault, limit=args.limit, source=args.source))
+        selected_events.extend(search_events(vault, args.query, scope=scope, limit=args.limit))
+    elif args.source or getattr(args, "project", None) is not None or getattr(args, "unassigned", False):
+        selected_events.extend(fetch_events(vault, scope=scope, limit=args.limit)["events"])
 
     ids.extend(event["id"] for event in selected_events if event.get("id"))
     ids = list(dict.fromkeys(ids))
@@ -861,8 +1029,10 @@ def do_forget(args):
             print("Aborted.")
             return
 
-    deleted = forget_events(vault, ids)
+    result = forget_events(vault, ids)
+    deleted = result["canonical_deleted"]
     hot_deleted = None
+    errors = list(result["cleanup_errors"])
     if hot_collection_exists(get_db_path()):
         try:
             hot_vault = open_hot_vault(
@@ -871,14 +1041,16 @@ def do_forget(args):
                 device=config.get_device(),
                 strategy=HOT_INDEX_STRATEGY,
             )
-            hot_deleted = forget_events(hot_vault, ids)
+            hot_result = forget_events(hot_vault, ids)
+            hot_deleted = hot_result["canonical_deleted"]
+            errors.extend(hot_result["cleanup_errors"])
         except Exception as exc:
-            print(f"Warning: Hot index forget failed: {exc}")
+            errors.append(f"Hot index forget failed: {exc}")
     if deleted:
         try:
             invalidate_holographic_indexes(get_log_dir())
         except OSError as exc:
-            print(f"Warning: Could not remove a derived memory index: {exc}")
+            errors.append(f"Could not remove a derived memory index: {exc}")
     try:
         from latticeshadow.pot_chain import PoTChain
 
@@ -899,6 +1071,8 @@ def do_forget(args):
     if hot_deleted is not None:
         message += f" Hot index deleted {hot_deleted} mirrored event(s)."
     print(message)
+    if errors:
+        raise SystemExit("Forget incomplete: " + "; ".join(errors))
 
 
 def do_privacy_report(args):
@@ -961,39 +1135,44 @@ def do_bench(args):
 
 
 def do_mcp(args):
+    from latticeshadow.sharing import (
+        create_grant, list_grants, load_grant, preview_grant, revoke_grant,
+    )
+
+    selected_dir = getattr(args, "vault_dir", None)
+    data_dir = str(Path(selected_dir).expanduser().absolute()) if selected_dir else get_log_dir()
+    vault_factory = (lambda: _restored_vault(Path(data_dir))) if selected_dir else (lambda: get_vault())
+    if args.mcp_command == "grant":
+        action = args.grant_command
+        if action == "create":
+            projects = list(args.project or [])
+            if args.unassigned:
+                projects.append(None)
+            if not projects or not args.source:
+                raise SystemExit("Choose at least one --project or --unassigned and one --source.")
+            grant = create_grant(data_dir, projects=projects, sources=args.source,
+                                 since=args.since, until=args.until, limit=args.limit)
+            print(json.dumps(grant, indent=2, sort_keys=True))
+        elif action == "list":
+            print(json.dumps(list_grants(data_dir), indent=2, sort_keys=True))
+        elif action == "preview":
+            grant = load_grant(data_dir, args.grant_id)
+            if grant is None:
+                raise SystemExit("Grant not found or revoked.")
+            print(json.dumps(preview_grant(vault_factory(), grant), indent=2, sort_keys=True))
+        elif action == "revoke":
+            if not revoke_grant(data_dir, args.grant_id):
+                raise SystemExit("Grant not found or already revoked.")
+            print(f"Revoked grant {args.grant_id} for subsequent requests.")
+        return
     if args.mcp_command == "serve":
+        if load_grant(data_dir, args.grant) is None:
+            raise SystemExit("Grant not found or revoked. Create one with 'shadow mcp grant create'.")
         from latticeshadow.mcp_server import serve
-        from latticeshadow.timeline import forget_events
 
-        def forget_all_stores(ids):
-            main_deleted = forget_events(get_vault(), ids)
-            payload = {"deleted": main_deleted, "ids": ids}
-            if hot_collection_exists(get_db_path()):
-                try:
-                    hot_vault = open_hot_vault(
-                        db_path=get_db_path(),
-                        master_key=get_or_create_master_key(),
-                        device=config.get_device(),
-                        strategy=HOT_INDEX_STRATEGY,
-                    )
-                    payload["hot_deleted"] = forget_events(hot_vault, ids)
-                except Exception as exc:
-                    payload["hot_error"] = str(exc)
-            if main_deleted:
-                try:
-                    invalidate_holographic_indexes(get_log_dir())
-                except OSError as exc:
-                    payload["cache_error"] = str(exc)
-            return payload
-
-        serve(
-            lambda: get_vault(),
-            db_path=get_db_path(),
-            data_dir=get_log_dir(),
-            forgetter=forget_all_stores,
-        )
-    else:
-        print("Usage: shadow mcp serve")
+        serve(vault_factory,
+              db_path=str(Path(data_dir) / "shadow.sqlite") if selected_dir else get_db_path(),
+              data_dir=data_dir, grant_id=args.grant, grant_store=data_dir)
 
 
 def do_consent(args):
@@ -1090,27 +1269,27 @@ def do_trust(args):
 # ── Memory Commands (LLM-powered) ────────────────────────────────────────────
 
 def do_ask(question):
-    """Ask a freeform question about your clipboard history."""
+    """Ask a freeform question about saved local memories."""
     from latticeshadow.llm import ShadowLLM, LLMError
 
     llm = ShadowLLM.from_config()
     if llm is None:
-        print("LLM not configured. Run: shadow config set memory.provider gemini")
+        print("LLM not configured. Choose a provider with 'shadow config set memory.provider PROVIDER'.")
         return
 
     vault = get_vault()
     if not vault or vault.count() == 0:
-        print("No clipboard history to search.")
+        print("No saved memories to search.")
         return
 
-    # Search for relevant clips using existing hybrid search
+    # Search saved memories using existing hybrid search.
     try:
         results = vault.search(question, n_results=10, hybrid=True)
         if not results or not results.documents:
-            print("No relevant clipboard history found.")
+            print("No relevant saved memories found.")
             return
     except Exception:
-        print("No relevant clipboard history found.")
+        print("No relevant saved memories found.")
         return
 
     # Build context from results
@@ -1127,10 +1306,10 @@ def do_ask(question):
         answer = llm.complete(
             system=(
                 "You are a helpful assistant. Answer the user's question using ONLY "
-                "the clipboard history context provided below. Be concise and specific. "
+                "the saved memory context provided below. Be concise and specific. "
                 "If the answer isn't in the context, say so."
             ),
-            user=f"Clipboard context:\n{context}\n\nQuestion: {question}",
+            user=f"Saved memory context:\n{context}\n\nQuestion: {question}",
         )
         print(answer)
     except LLMError as e:
@@ -1138,22 +1317,22 @@ def do_ask(question):
 
 
 def do_recap():
-    """Summarize today's clipboard activity."""
+    """Summarize today's saved local memories."""
     from latticeshadow.llm import ShadowLLM, LLMError
 
     llm = ShadowLLM.from_config()
     if llm is None:
-        print("LLM not configured. Run: shadow config set memory.provider gemini")
+        print("LLM not configured. Choose a provider with 'shadow config set memory.provider PROVIDER'.")
         return
 
     vault = get_vault()
     if not vault:
-        print("No clipboard history.")
+        print("No saved memories.")
         return
 
     today_clips = vault.get_today()
     if not today_clips:
-        print("No clipboard activity today.")
+        print("No saved memories today.")
         return
 
     # Format clips for the LLM
@@ -1166,13 +1345,12 @@ def do_recap():
     try:
         answer = llm.complete(
             system=(
-                "Summarize this person's day based on their clipboard activity. "
-                "Group by time blocks and topics. Use bullet points. Be concise. "
-                "Focus on what they were DOING, not what they copied."
+                "Summarize this person's day using only the saved memory entries below. "
+                "Group by time blocks and topics. Use bullet points. Be concise."
             ),
             user="\n\n".join(clip_lines),
         )
-        print(f"\n\033[96m── Today's Recap ({len(today_clips)} clips) ──\033[0m\n")
+        print(f"\n\033[96m── Today's Recap ({len(today_clips)} memories) ──\033[0m\n")
         print(answer)
     except LLMError as e:
         print(f"LLM error: {e}")
@@ -1184,17 +1362,17 @@ def do_context():
 
     llm = ShadowLLM.from_config()
     if llm is None:
-        print("LLM not configured. Run: shadow config set memory.provider gemini")
+        print("LLM not configured. Choose a provider with 'shadow config set memory.provider PROVIDER'.")
         return
 
     vault = get_vault()
     if not vault:
-        print("No clipboard history.")
+        print("No saved memories.")
         return
 
     recent = vault.get_recent(limit=20)
     if not recent:
-        print("No recent clipboard activity.")
+        print("No recent saved memories.")
         return
 
     clip_lines = []
@@ -1207,7 +1385,7 @@ def do_context():
     try:
         answer = llm.complete(
             system=(
-                "Based on these recent clipboard entries (most recent first), describe "
+                "Based on these recent saved memory entries (most recent first), describe "
                 "what the user is currently working on. Be specific about technologies, "
                 "files, and tasks. One paragraph, no bullet points."
             ),
@@ -1232,13 +1410,20 @@ def do_config(args):
             (name for name, spec in consent.SURFACES.items() if spec["config_key"] == args.key),
             None,
         )
-        if surface:
+        if surface or args.key == "inputs.paused":
             value = args.value.lower()
             if value not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
                 raise SystemExit("Use on|off for a capture, listener, or sync setting.")
-            consent.set_consent(surface, value in ("on", "true", "yes", "1"))
+            enabled = value in ("on", "true", "yes", "1")
+            if surface:
+                consent.set_consent(surface, enabled)
+            else:
+                consent.set_paused(enabled)
         else:
-            cfg.set(args.key, args.value)
+            try:
+                cfg.set(args.key, args.value)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
         print(f"Set {args.key} = {args.value}")
         # Show auto-model if it was set
         if args.key == "memory.provider":
@@ -1944,7 +2129,10 @@ def do_doctor():
             else:
                 checks.append((True, "Database", db_detail, None))
         except Exception as e:
-            checks.append((False, "Database", f"Failed to open database: {e}", "run 'shadow shred' to reset database"))
+            checks.append((
+                False, "Database", f"Failed to open database: {e}",
+                "stop other writers; keep the vault and key intact; check Keychain access, model identity, and a verified backup",
+            ))
     else:
         checks.append((False, "Database", "NOT found", "run 'shadow install' and copy some text to initialize"))
 
@@ -1960,14 +2148,14 @@ def do_doctor():
             with open(PLIST_PATH, "rb") as f:
                 pl = plistlib.load(f)
             args = pl.get("ProgramArguments", [])
-            if args and args[0] != sys.executable:
-                checks.append((False, "Plist Python", f"Mismatch! Plist uses {args[0]}, current is {sys.executable}", "run 'shadow install' to rewrite plist"))
+            if args != _daemon_argv():
+                checks.append((False, "Plist daemon", "Launchd command differs from this installation", "run 'shadow install' to rewrite plist"))
             else:
-                checks.append((True, "Plist Python", "Matches current Python interpreter", None))
+                checks.append((True, "Plist daemon", "Matches this installation", None))
         except Exception as e:
-            checks.append((False, "Plist Python", f"Failed to parse plist: {e}", "run 'shadow install'"))
+            checks.append((False, "Plist daemon", f"Failed to parse plist: {e}", "run 'shadow install'"))
     else:
-        checks.append((True, "Plist Python", "Launchd Plist not present (skipped)", None))
+        checks.append((True, "Plist daemon", "Launchd Plist not present (skipped)", None))
 
     # 10. Daemon status
     res = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
@@ -2107,9 +2295,12 @@ def main():
   paste  <query>  Search and copy the #1 result back to clipboard
   watch           Live stream of clipboard captures (Ctrl+C to stop)
   status          Check daemon and database status
+  pause           Pause capture without changing source choices
+  resume          Resume chosen capture sources
   now             Show current private memory context
   timeline        Show a recent or searched memory timeline
   remember        Add a normalized memory event
+  assign-project  Set or clear an explicit project label on saved events
   why <query>     Explain relevance with matching memory events
   summarize       Summarize current or searched memory context
   open-context    Open a URL/file target from matching context
@@ -2123,26 +2314,26 @@ def main():
   native intents   Show native App Intents command contract
   bench moonshot  Run a moonshot retrieval smoke benchmark
   mcp serve       Serve redacted memory over MCP stdio
-  sleep           Trigger REM sleep consolidation
+  sleep           Consolidate memory; selected LLM provider may receive excerpts
   shred           Panic button: crypto-shred all history
-  install         Install the background daemon and CLI alias
+  install         Prepare the background daemon without starting capture
   enable          Start the background daemon
   disable         Stop the background daemon
-  remove          Uninstall everything
+  remove          Remove background integration; ask before deleting vault data
   doctor          Run diagnostic health check
   compile         Compile daily history into a holographic memory vector
   recall <query>  Recall a document from the holographic memory vector
   gui             Start native macOS Menu Bar GUI
   fix             Speculatively resolve clipboard error tracebacks from history
   --- Memory (LLM-powered) ---
-  ask    <question> Ask a question about your clipboard history
-  recap             Summarize today's clipboard activity
-  context           What are you working on right now?
+  ask    <question> Ask about saved memories; may send excerpts to your LLM provider
+  recap             Summarize today's saved memories; may send excerpts
+  context           Describe recent saved memories; may send excerpts
   config            View or modify LatticeShadow settings""",
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    sp = subparsers.add_parser("search", help="Search clipboard history")
+    sp = subparsers.add_parser("search", help="Search saved local memory")
     sp.add_argument("query", type=str, help="Semantic query")
 
     unsp = subparsers.add_parser("unswap", help="Restore the state of a backgrounded application using semantic context")
@@ -2153,6 +2344,8 @@ def main():
 
     subparsers.add_parser("watch", help="Live stream of clipboard captures")
     subparsers.add_parser("status", help="Check daemon and database status")
+    subparsers.add_parser("pause", help="Persistently pause all capture sources")
+    subparsers.add_parser("resume", help="Resume chosen capture sources after consent")
 
     now_p = subparsers.add_parser("now", help="Show current private memory context")
     now_p.add_argument("--limit", type=int, default=20, help="Number of recent events to show")
@@ -2161,20 +2354,33 @@ def main():
     timeline_p = subparsers.add_parser("timeline", help="Show a recent or searched memory timeline")
     timeline_p.add_argument("--limit", type=int, default=20, help="Number of events to show")
     timeline_p.add_argument("--source", type=str, help="Filter by event source/type")
-    timeline_p.add_argument("--since", type=str, help="Only events after this SQLite timestamp/date")
-    timeline_p.add_argument("--until", type=str, help="Only events before this SQLite timestamp/date")
+    timeline_project = timeline_p.add_mutually_exclusive_group()
+    timeline_project.add_argument("--project", type=str, help="Filter by explicit project label")
+    timeline_project.add_argument("--unassigned", action="store_true", help="Only events without a project")
+    timeline_p.add_argument("--since", type=str, help="Include events at or after this timezone-aware time")
+    timeline_p.add_argument("--until", type=str, help="Exclude events at or after this timezone-aware time")
     timeline_p.add_argument("--query", type=str, help="Semantic search query")
+    timeline_p.add_argument("--cursor", type=str, help="Continue a recent timeline page")
     timeline_p.add_argument("--json", action="store_true", help="Emit JSON")
 
     remember_p = subparsers.add_parser("remember", help="Add a normalized memory event")
     remember_p.add_argument(
         "event_type",
-        choices=["clipboard", "terminal", "ambient", "file", "url", "app", "repair", "sync", "model_call"],
+        choices=["clipboard", "terminal", "note", "ambient", "file", "url", "app", "repair", "sync", "model_call"],
         help="Event type",
     )
     remember_p.add_argument("text", type=str, help="Event text")
     remember_p.add_argument("--metadata", type=str, help="Additional metadata JSON")
     remember_p.add_argument("--id", type=str, help="Explicit document id")
+    remember_p.add_argument("--source", type=str, help="Source label, defaults to event type")
+    remember_p.add_argument("--project", type=str, help="Explicit project label")
+    remember_p.add_argument("--timestamp", type=str, help="Original event time with timezone")
+
+    assign_p = subparsers.add_parser("assign-project", help="Assign or clear a saved event's project")
+    assign_p.add_argument("--id", action="append", required=True, help="Memory event id; repeat for several")
+    assign_choice = assign_p.add_mutually_exclusive_group(required=True)
+    assign_choice.add_argument("--project", type=str, help="Explicit project label")
+    assign_choice.add_argument("--unassigned", action="store_true", help="Clear the project label")
 
     why_p = subparsers.add_parser("why", help="Show matching memory events for a query")
     why_p.add_argument("query", type=str, help="Semantic query")
@@ -2195,6 +2401,11 @@ def main():
     forget_p.add_argument("--id", action="append", help="Memory document id to delete")
     forget_p.add_argument("--query", type=str, help="Delete top matches for a semantic query")
     forget_p.add_argument("--source", type=str, help="Delete recent events from a source/type")
+    forget_project = forget_p.add_mutually_exclusive_group()
+    forget_project.add_argument("--project", type=str, help="Select recent events from this project")
+    forget_project.add_argument("--unassigned", action="store_true", help="Select recent unassigned events")
+    forget_p.add_argument("--since", type=str, help="Select events at or after this timezone-aware time")
+    forget_p.add_argument("--until", type=str, help="Select events before this timezone-aware time")
     forget_p.add_argument("--limit", type=int, default=10, help="Maximum events selected by query/source")
     forget_p.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
 
@@ -2260,21 +2471,52 @@ def main():
     moonshot_p.add_argument("--output", type=str, help="Write JSON report to a file")
 
     mcp_p = subparsers.add_parser("mcp", help="MCP memory server commands")
-    mcp_sub = mcp_p.add_subparsers(dest="mcp_command")
-    mcp_sub.add_parser("serve", help="Serve redacted memory over MCP stdio")
+    mcp_sub = mcp_p.add_subparsers(dest="mcp_command", required=True)
+    mcp_serve = mcp_sub.add_parser("serve", help="Serve one scoped, read-only grant over MCP stdio")
+    mcp_serve.add_argument("--grant", required=True, help="Existing local sharing grant ID")
+    mcp_serve.add_argument("--vault-dir", help="Explicit alternate vault directory with shadow.sqlite and .key")
+    mcp_grant = mcp_sub.add_parser("grant", help="Manage local assistant-sharing grants")
+    grant_sub = mcp_grant.add_subparsers(dest="grant_command", required=True)
+    grant_create = grant_sub.add_parser("create", help="Allow an explicit project/source slice")
+    grant_create.add_argument("--project", action="append", help="Allowed project; repeat to include several")
+    grant_create.add_argument("--unassigned", action="store_true", help="Include events without a project")
+    grant_create.add_argument("--source", action="append", help="Allowed source; repeat to include several")
+    grant_create.add_argument("--since", help="Inclusive timezone-aware start")
+    grant_create.add_argument("--until", help="Exclusive timezone-aware end")
+    grant_create.add_argument("--limit", type=int, default=20, help="Maximum results per request")
+    grant_create.add_argument("--vault-dir", help="Explicit alternate vault directory")
+    grant_list = grant_sub.add_parser("list", help="List grant policies without opening the vault")
+    grant_list.add_argument("--vault-dir", help="Explicit alternate vault directory")
+    grant_preview = grant_sub.add_parser("preview", help="Preview the eligible record count and examples")
+    grant_preview.add_argument("grant_id", help="Grant ID")
+    grant_preview.add_argument("--vault-dir", help="Explicit alternate vault directory")
+    grant_revoke = grant_sub.add_parser("revoke", help="Stop subsequent requests under a grant")
+    grant_revoke.add_argument("grant_id", help="Grant ID")
+    grant_revoke.add_argument("--vault-dir", help="Explicit alternate vault directory")
 
-    subparsers.add_parser("sleep", help="Trigger REM sleep consolidation")
-    subparsers.add_parser("shred", help="Crypto-shred clipboard history")
+    subparsers.add_parser("sleep", help="Consolidate memory; a selected LLM provider may receive excerpts")
+    subparsers.add_parser("shred", help="Crypto-shred the entire local memory vault")
     subparsers.add_parser("install", help="Prepare the daemon without enabling capture or shell hooks")
     rebuild_p = subparsers.add_parser("rebuild-index", help="Re-embed saved events with the pinned local model")
     rebuild_p.add_argument("--yes", action="store_true", help="Skip the REBUILD prompt")
+    backup_p = subparsers.add_parser("backup", help="Export or restore a portable encrypted vault")
+    backup_sub = backup_p.add_subparsers(dest="backup_command", required=True)
+    backup_export = backup_sub.add_parser("export", help="Export the current canonical vault")
+    backup_export.add_argument("archive", help="New encrypted archive path")
+    backup_export.add_argument("--passphrase-fd", type=int, help="Read passphrase from an already-open descriptor")
+    backup_restore = backup_sub.add_parser("restore", help="Restore into a new private destination directory")
+    backup_restore.add_argument("archive", help="Encrypted archive path")
+    backup_restore.add_argument("--destination", required=True, help="New directory; no existing vault is replaced")
+    backup_restore.add_argument("--passphrase-fd", type=int, help="Read passphrase from an already-open descriptor")
+    backup_inspect = backup_sub.add_parser("inspect", help="Verify a restored destination without activating it")
+    backup_inspect.add_argument("--destination", required=True, help="Previously restored directory")
     shell_p = subparsers.add_parser("shell", help="Manage optional Zsh widgets")
     shell_sub = shell_p.add_subparsers(dest="shell_command", required=True)
     shell_sub.add_parser("enable")
     shell_sub.add_parser("disable")
     subparsers.add_parser("enable", help="Start the daemon")
     subparsers.add_parser("disable", help="Stop the daemon")
-    subparsers.add_parser("remove", help="Uninstall everything")
+    subparsers.add_parser("remove", help="Remove background integration; ask before deleting vault data")
     subparsers.add_parser("doctor", help="Run diagnostic health check")
 
     # Drift Alarms / Calibration commands
@@ -2306,11 +2548,11 @@ def main():
     gpp.add_argument("query", type=str, help="Semantic query to search and paste")
 
     # Memory commands (LLM-powered)
-    ap = subparsers.add_parser("ask", help="Ask a question about clipboard history")
+    ap = subparsers.add_parser("ask", help="Ask about saved memories; may send unscoped excerpts to the configured LLM provider")
     ap.add_argument("question", type=str, help="Freeform question")
 
-    subparsers.add_parser("recap", help="Summarize today's clipboard activity")
-    subparsers.add_parser("context", help="What are you working on right now?")
+    subparsers.add_parser("recap", help="Summarize today's saved memories; may send unscoped excerpts to the configured LLM provider")
+    subparsers.add_parser("context", help="Describe recent saved memories; may send unscoped excerpts to the configured LLM provider")
 
     # Config commands
     cp = subparsers.add_parser("config", help="View or modify settings")
@@ -2347,9 +2589,12 @@ def main():
         "compose": do_compose,
         "watch": do_watch,
         "status": do_status,
+        "pause": do_pause,
+        "resume": do_resume,
         "now": lambda: do_now(args),
         "timeline": lambda: do_timeline(args),
         "remember": lambda: do_remember(args),
+        "assign-project": lambda: do_assign_project(args),
         "why": lambda: do_why(args),
         "summarize": lambda: do_summarize(args),
         "open-context": lambda: do_open_context(args),
@@ -2367,6 +2612,7 @@ def main():
         "shred": do_shred,
         "install": do_install,
         "rebuild-index": lambda: do_rebuild_index(args),
+        "backup": lambda: do_backup(args),
         "shell": lambda: do_shell(args),
         "enable": do_enable,
         "disable": do_disable,
@@ -2391,7 +2637,10 @@ def main():
 
     handler = commands.get(args.command)
     if handler:
-        handler()
+        try:
+            handler()
+        except (ValueError, FileNotFoundError, FileExistsError, PermissionError) as exc:
+            raise SystemExit(f"shadow: {exc}") from None
     else:
         parser.print_help()
 

@@ -9,17 +9,19 @@ diary. The latter would be alarming even if it worked.
 
 “Implemented” below means the repository has a command or API and automated
 coverage. It does not mean the feature has had broad use on real machines or a
-security audit. Start with the [manual walkthrough](GETTING_STARTED.md).
+security audit. Start with the [user manual](USER_MANUAL.md) or the shorter
+[first-run guide](GETTING_STARTED.md).
 
 | Area | What exists | Current limit |
 | --- | --- | --- |
-| Manual memory on macOS | `shadow remember`, `shadow timeline`, `shadow search`, and `shadow forget` save, inspect, rank, and delete local events. | Recall quality has only a small labeled evaluation; search may miss a useful event or rank a bad one first. |
+| Manual memory on macOS | `shadow remember`, scoped `shadow timeline`, `shadow search`, project assignment, and `shadow forget` save, inspect, rank, and delete local events. | Integrated real-model search reached [96% top-five recall](validation/recall-local.md) on an authored synthetic fixture. A [10,000-event current packaged-app run](validation/packaged-app-20669ff-2026-09-23.md) met the warm latency target. Search returns suggestions, not answer confidence. |
 | Local retrieval model | The CLI pins a 128-dimensional Static Retrieval MRL model and records model identity for collections. | First use downloads the model; incompatible old vectors require an explicit rebuild. |
-| Background capture | An opt-in daemon reads future clipboard text and Zsh history entries; `shadow status` and `shadow disable` expose and stop daemon state. Both sources default off and require explicit on/off choices before startup. | Password-manager concealment and secret filters are incomplete boundaries. Broader desktop validation is still needed. |
+| Background capture | An opt-in daemon reads future clipboard text and Zsh history entries. Both sources default off and require explicit choices. Pause, literal/source exclusions, and optional age retention are implemented; the [current app excluded a pre-enable clipboard value, captured a later synthetic copy, and preserved pause/source choices across an ordinary stripped-guest reboot](validation/packaged-app-20669ff-2026-09-23.md). | Concealment markers and exclusions are incomplete secret boundaries. Stock first-launch behavior remains untested. |
+| Recovery | `shadow backup export`, `restore`, and `inspect` create an authenticated portable archive and a separately keyed recovery destination. The [current app restored a predecessor's synthetic archive in a fresh guest](validation/packaged-app-20669ff-2026-09-23.md); the [preceding app passed full export/restore/rejection checks](validation/mini-b603-packaged-2026-09-23.md). | The 256 MiB plaintext cap can need several times that RAM. Populated live vaults are never automatically replaced, and the archive does not migrate consent or Keychain state. |
 | DB library | `latticeshadow-db` works without the macOS client and provides SQLite document storage, retrieval, metadata filters, and delete operations. | Without a caller-provided embedding function it uses hash vectors, which are not semantic. Experimental indexes need workload-specific testing. |
-| MCP | A stdio protocol handler exposes recall, recent context, summaries, privacy reports, repair proposals, and confirmed deletion. | Automated protocol tests exist; a live assistant-client connection and failure handling still need end-to-end validation. Redaction is best effort. |
-| Menu bar and native companion | macOS UI and native scaffolding exist in the repository. | Packaging and real-world desktop validation are incomplete; there is no polished installable app release. |
-| Releases | Version tags can publish source archives from tested `main` commits. | There are no installable wheels or packaged native companion yet. |
+| MCP | Explicit local grants restrict read-only recall, recent context, extractive summaries, and live citation resolution. An independent SDK test and a synthetic Codex CLI host walkthrough passed. | Grant policy and pattern redaction do not stop a separate local process from reading files or guarantee that every secret is removed. |
+| Menu bar and native companion | A recall panel with scope filters, preview, copy/open, project assignment, and confirmed forget is implemented. | The earlier ZIP passed the [logged-in menu/Recall/filter/preview/Copy/Open/Assign/Forget journey](validation/desktop-gui.md). The [keyboard-fixed ZIP](validation/packaged-app-14aa7a3-2026-09-23.md) passed focused-row Return and keypad Enter copying. The cross-app global shortcut remains unproven. |
+| Releases | Tags publish source archives. The earlier unsigned ZIP passed [packaged recall, query timing, fresh-guest recovery, and explicit daemon/reboot/removal checks](validation/packaged-app-20669ff-2026-09-23.md) plus a [logged-in GUI journey](validation/desktop-gui.md). The [keyboard-fixed ZIP](validation/packaged-app-14aa7a3-2026-09-23.md) passed bundle verification and a focused installed keyboard check. | Populated 0.1 upgrade remains unverified after an ad-hoc-signature Keychain access failure. Stock Gatekeeper, signing, and notarization remain before a public binary release. |
 
 ## Where does the information go?
 
@@ -27,7 +29,8 @@ security audit. Start with the [manual walkthrough](GETTING_STARTED.md).
   default client path is `~/.latticeshadow/shadow.sqlite`; configuration, keys,
   and logs live nearby. The DB library uses the path you pass to `connect`.
 - The CLI's default memory provider is `none`, so ordinary remember/search does
-  not call a remote language model. Its retrieval model downloads from Hugging
+  not call a remote language model and optional LLM commands do not probe an
+  unselected local server. Its retrieval model downloads from Hugging
   Face on first use and then runs locally. If you configure a cloud LLM or
   another sync/listener feature, those choices have additional data boundaries.
 - The client encrypts stored document text in its privacy-enabled collection
@@ -39,10 +42,15 @@ security audit. Start with the [manual walkthrough](GETTING_STARTED.md).
   material is normally wrapped for Keychain storage, but the current code can
   fall back to a raw local key file if wrapping fails. Neither behavior should
   be hidden behind the word “private.”
-- The MCP server redacts known patterns before returning event text. Pattern
-  matching can miss secrets; a connected assistant can receive anything the
-  server does not catch. The CLI's optional LLM commands may send processed
-  context to a configured provider.
+- The MCP server requires an explicit project/source grant and redacts known
+  patterns before returning allowed event text. Pattern matching can miss
+  secrets; a connected assistant can receive anything the server does not
+  catch. The [sharing guide](MCP.md) explains scope and revocation. The CLI's
+  optional `ask`, `recap`, and `context` commands can send unscoped, unredacted
+  excerpts from any saved event type to a configured local or remote provider;
+  MCP grants and redaction do not apply to those commands. Experimental `sleep`
+  enrichment can also send saved-entry excerpts when a provider is selected;
+  its sensitivity filter is heuristic.
 - iCloud, peer mesh, mobile API, and ambient app context are disabled by
   default. They are experimental and should be reviewed separately before
   enabling them. Do not expose a peer listener to an untrusted network.

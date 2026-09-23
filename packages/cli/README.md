@@ -59,10 +59,13 @@ shadow disable
 at the next login. Re-running it stops a running daemon until `shadow enable`.
 After updating the checkout, re-run `shadow install` so the daemon's local
 source-change baseline matches the installed code.
-The wizard shows each optional data source and network surface. Clipboard and
-terminal capture default to off; both need an explicit on/off choice before
+The wizard asks about clipboard and terminal capture only. Both default to off
+and need an explicit on/off choice before
 `shadow enable`. That command loads the model and starts
-the daemon; `shadow disable` stops it across logins and reboots. Optional Zsh widgets require
+the daemon; `shadow pause` and `shadow resume` control capture without changing
+source choices, while `shadow disable` stops the daemon across logins and reboots.
+Experimental and network services require a separate `shadow consent set` choice.
+Optional Zsh widgets require
 `shadow shell enable`; that command does
 not bind keys or replace Tab completion. You can choose a binding yourself,
 for example `bindkey '^G' latticeshadow-ghost-paste`. Run
@@ -81,11 +84,14 @@ to a database backup. Stop other writers while it runs.
 
 ## Assistant access and experimental features
 
-`shadow mcp serve` starts a stdio server. Its tools cover recall, current
-context, summaries, privacy reports, repair proposals, and explicit deletion.
-It does not automatically connect to an assistant. Summaries may use a
-configured model provider; check that configuration before sending private
-memory to one. Peer mesh synchronization, homomorphic queries, and proof
+`shadow mcp grant create --project ops --source manual` creates a local
+allowlist; `shadow mcp grant preview GRANT_ID` shows eligible records. Launch
+`shadow mcp serve --grant GRANT_ID` from a configured MCP host. The server is
+read-only: scoped recall, current context, extractive summaries, and live
+citations. Revoke with `shadow mcp grant revoke GRANT_ID`. A tested independent
+MCP SDK client can use the installed command; a synthetic Codex CLI host also
+recalled and resolved a citation. See the [sharing guide](../../docs/MCP.md) for limits and a host
+configuration example. Peer mesh synchronization, homomorphic queries, and proof
 handling are experimental; the P2P proofs are simulated and do not provide
 zk-SNARK security. Mesh queries now require trusted device pairing and signed
 messages; existing unpaired peers no longer answer searches. Do not expose a
@@ -99,6 +105,7 @@ clients; it no longer writes a pairing code into iCloud.
 - [Technical tome](docs/TOME.md): internals and experimental protocols.
 - [Future directions](docs/FUTURE.md): proposed work, with current gaps called out.
 - [Native companion](native/README.md): optional App Intents and Foundation Models bridge.
+- [Standalone macOS app](packaging/README.md): unsigned candidate build and validation limits.
 - [CLI tests](tests/): examples of supported command behavior.
 
 Run `make test-cli` and `make docs` from the repository root after changing the

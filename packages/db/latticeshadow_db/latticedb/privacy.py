@@ -204,20 +204,22 @@ class PrivacyEngine:
         """
         Decrypt a document text using AESGCM envelope encryption.
         """
-        if not encrypted_text or not encrypted_text.startswith("enc:v2:"):
+        if not encrypted_text or not encrypted_text.startswith("enc:"):
             return encrypted_text
+        if not encrypted_text.startswith("enc:v2:"):
+            raise ValueError("Unsupported encrypted document format")
         try:
             doc_key = self.derive_data_key(b"document")
             aesgcm = AESGCM(doc_key)
-            raw = b64decode(encrypted_text[7:])
-            if len(raw) < 12:
-                return encrypted_text
+            raw = b64decode(encrypted_text[7:], validate=True)
+            if len(raw) < 28:
+                raise ValueError("Encrypted document is truncated")
             nonce = raw[:12]
             ciphertext = raw[12:]
             plaintext = aesgcm.decrypt(nonce, ciphertext, self.DOCUMENT_AAD)
             return plaintext.decode("utf-8")
-        except Exception:
-            return encrypted_text
+        except Exception as exc:
+            raise ValueError("Unable to decrypt document") from exc
 
     # ── KEK Resolution (3-Tier Waterfall) ──────────────────────────────────
 

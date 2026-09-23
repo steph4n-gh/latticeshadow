@@ -49,9 +49,9 @@ flowchart TB
     cli -.-> |only when configured| optional[LLM providers, iCloud, mesh peers, or mobile API]
 ```
 
-`shadow mcp serve` is a local **stdio** JSON-RPC process, not a network listener. An MCP client must be configured to launch it. The exposed tools can recall and summarize memory, report privacy state, create repair proposals, and delete named events with explicit confirmation. Responses apply pattern-based redaction to event text and string metadata. Redaction can miss secrets, and the assistant client may have its own remote boundary; decide what to connect before handing it access to your memory.
+`shadow mcp serve` is a local **stdio** JSON-RPC process, not a network listener. An MCP client must be configured to launch it with a local sharing grant. The exposed tools recall allowed events, show recent allowed context, make extractive summaries, and resolve live citations; they cannot delete or change memory. Responses apply pattern-based redaction to event text and string metadata. Redaction can miss secrets, and the assistant client may have its own remote boundary; decide what to connect before handing it access to your memory.
 
-The core save/search path does not require a hosted inference API. The model download needs network access once. Mesh sync and the mobile API are off by default; enabling them starts listeners. The mobile API binds only to IPv4 loopback. iCloud sync exchanges encrypted packets, while remote LLM providers can receive selected text. Some LLM-assisted commands also probe a local LM Studio endpoint when no provider is configured. Review [configuration and capture guidance](../packages/cli/README.md) before enabling those paths.
+The core save/search path does not require a hosted inference API. The model download needs network access once. Mesh sync and the mobile API are off by default; enabling them starts listeners. The mobile API binds only to IPv4 loopback. iCloud sync exchanges encrypted packets, while optional LLM commands can send unscoped, unredacted saved-memory excerpts to a selected local or remote provider. Provider `none` does not probe an unselected LM Studio endpoint. Review [configuration and capture guidance](../packages/cli/README.md) before enabling those paths.
 
 ## Where to look in the code
 

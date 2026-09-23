@@ -383,7 +383,7 @@ def test_shell_loop_prefilling(setup_test_env, capsys, monkeypatch):
     def mock_sleep(secs):
         nonlocal iteration
         iteration += 1
-        if iteration >= 1:
+        if iteration >= 2:
             raise KeyboardInterrupt("Stop daemon")
             
     monkeypatch.setattr(time, "sleep", mock_sleep)
@@ -396,6 +396,8 @@ def test_shell_loop_prefilling(setup_test_env, capsys, monkeypatch):
     # Mock history watcher instantiation
     class MockWatcher:
         def __init__(self, *args, **kwargs):
+            pass
+        def skip_to_end(self):
             pass
         def poll(self):
             return [{"text": "pytest tests/test_ghost_paste.py", "timestamp": time.time()}]

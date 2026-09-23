@@ -13,6 +13,7 @@ import platform
 SERVICE_NAME = "com.latticedb.shadow"
 ACCOUNT_NAME = "latticeshadow-master-key"
 _SECURITY = "/usr/bin/security"
+_SECURITY_TIMEOUT = 10
 
 
 class KeychainError(Exception):
@@ -30,6 +31,18 @@ def _check_platform():
         raise KeychainError("macOS Keychain is only available on macOS (Darwin)")
 
 
+def _run_security(args):
+    try:
+        return subprocess.run(
+            [_SECURITY, *args], capture_output=True, text=True,
+            timeout=_SECURITY_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise KeychainLocked(
+            "Keychain access timed out. Unlock your macOS login keychain and try again."
+        ) from exc
+
+
 def store_key(key: str) -> None:
     """
     Store (or update) the master key in the macOS Keychain.
@@ -37,16 +50,14 @@ def store_key(key: str) -> None:
     Uses `security add-generic-password -U` for idempotent upsert.
     """
     _check_platform()
-    result = subprocess.run(
+    result = _run_security(
         [
-            _SECURITY, "add-generic-password",
+            "add-generic-password",
             "-a", ACCOUNT_NAME,
             "-s", SERVICE_NAME,
             "-w", key,
             "-U",  # update if exists
         ],
-        capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -64,15 +75,13 @@ def retrieve_key() -> str | None:
     Returns the key string, or None if not found.
     """
     _check_platform()
-    result = subprocess.run(
+    result = _run_security(
         [
-            _SECURITY, "find-generic-password",
+            "find-generic-password",
             "-a", ACCOUNT_NAME,
             "-s", SERVICE_NAME,
             "-w",  # output only the password
         ],
-        capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -93,14 +102,12 @@ def delete_key() -> bool:
     Returns True if deleted, False if the item was not found.
     """
     _check_platform()
-    result = subprocess.run(
+    result = _run_security(
         [
-            _SECURITY, "delete-generic-password",
+            "delete-generic-password",
             "-a", ACCOUNT_NAME,
             "-s", SERVICE_NAME,
         ],
-        capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
         stderr = result.stderr.strip()

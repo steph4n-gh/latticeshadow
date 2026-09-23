@@ -1,5 +1,8 @@
 # Getting started
 
+For the full guided reference, including the menu bar, backup recovery, and
+every command family, see the [user manual](USER_MANUAL.md).
+
 You can try LatticeShadow without giving it your clipboard, shell history, or
 background time. Save one harmless note, find it, and decide whether the rest is
 useful to you. The daemon can wait; it is very patient.
@@ -65,9 +68,10 @@ shadow enable
 shadow status
 ```
 
-Answer every wizard prompt deliberately. Its defaults reflect the current
-configuration; both capture sources are off in a fresh setup. You can make the
-two required choices without the full wizard. For example, to capture clipboard
+The wizard asks only about clipboard and terminal capture. Its defaults reflect
+the current configuration; both are off in a fresh setup. Other services remain
+off until you enable them individually with `shadow consent set`. You can make
+the two required choices without the wizard. For example, to capture clipboard
 text but leave shell history alone:
 
 ```sh
@@ -93,7 +97,41 @@ pending source. After updating the checkout, run `shadow install` again to
 refresh the local daemon code baseline, then `shadow enable`. Reinstalling
 stops the old daemon. Manual saves and searches do not require capture consent.
 
-Stop capture with:
+Pause capture without changing your source choices, including across a reboot:
+
+```sh
+shadow pause
+shadow status
+shadow resume
+```
+
+To exclude a whole source or a literal piece of text before the daemon saves it,
+set a JSON array. Matches in text ignore case. These are literal strings, not
+regular expressions, and they cannot retroactively delete an event:
+
+```sh
+shadow config set inputs.excluded_sources '["terminal"]'
+shadow config set inputs.excluded_literals '["example secret prefix"]'
+```
+
+Each list accepts at most 100 nonempty entries of at most 256 UTF-8 bytes. An
+empty list (`'[]'`) removes that exclusion. To remove events older than 30 days,
+use `shadow config set retention.days 30`; `0` disables automatic retention.
+The daemon checks once at startup and hourly, using the event's occurrence time
+(or insertion time for legacy events without one). It deletes from the live
+canonical and optional hot index. Older backups, original source files, and
+data already shared with another application are separate copies.
+
+The menu-bar app (`shadow gui`) has a recall panel with recent events when the
+search field is empty. Select a result to see its source, time, project, ID, and
+preview. You can copy, open a supported link or file, assign a project, or
+confirm Forget. The menu lets you choose Option-Space, Control-Option-Space,
+Command-Option-Space, or Off for the shortcut. Use **Open Recall…** in the menu
+if a shortcut is unavailable. The packaged menu and Recall actions passed a
+[logged-in synthetic VM journey](validation/desktop-gui.md); cross-app shortcut
+behavior remains unproven through Screen Sharing.
+
+Stop the daemon with:
 
 ```sh
 shadow disable
@@ -107,6 +145,30 @@ starts. Disabling the daemon keeps it off across logins and reboots; it does not
 Use `shadow forget --id ...` for selected events, or inspect `shadow remove`
 before uninstalling. `shadow remove` asks separately whether to delete local
 data.
+
+## Make a portable backup
+
+Export a passphrase-encrypted snapshot of the canonical vault:
+
+```sh
+shadow backup export ~/Desktop/latticeshadow.lsb
+shadow backup restore ~/Desktop/latticeshadow.lsb --destination ~/Desktop/latticeshadow-restored
+shadow backup inspect --destination ~/Desktop/latticeshadow-restored
+```
+
+The passphrase is prompted, not placed on the command line. For a controlled
+script, `--passphrase-fd N` reads one line from an already-open descriptor.
+The archive includes event IDs, text, provenance, tombstones, and source-model
+identity. It excludes local keys, settings, logs, consent, sync state, and
+derived indexes. The current alpha rejects a plaintext payload above 256 MiB;
+export and restore can temporarily need several times that much RAM.
+
+Restore creates a **new** private directory and key, then verifies that it can
+reopen the encrypted vault. It does not touch your current vault or Keychain,
+enable capture, or connect an assistant. The destination's `.key` is a private
+0600 file; keep that directory and archive safe. The command prints activation
+steps for a fresh macOS profile without an existing LatticeShadow vault or
+Keychain key. There is no automatic replacement or merge of a live vault.
 
 ## Linux or another non-macOS system: use the DB library
 
@@ -137,18 +199,26 @@ uses the DB's default `privacy=False`; choose and review your storage policy
 before adding sensitive data. See the [DB guide](../packages/db/README.md) for
 its API and optional research features.
 
-## Assistant access (experimental integration)
+## Assistant access (explicit grant)
 
-After you have saved an event, `shadow mcp serve` runs a local MCP server over
-stdio. A client must be configured separately to launch that command from the
-same installed environment. The server exposes redacted recall, recent context,
-summaries, privacy reports, repair proposals, and explicit deletion by ID.
-Redaction uses patterns and heuristics; it can miss secrets. Treat a connected
-assistant as a recipient of the data you permit it to read.
+Save a harmless note in a named project, then grant an assistant access to that
+project and source:
 
-The protocol handler has automated tests, but a real assistant-client setup is
-still on the [improvement backlog](SPRINT.md). We do not yet give a copy-paste
-client configuration that we have not verified end to end.
+```sh
+shadow remember note "Restart the widget queue" --project ops --source manual
+shadow mcp grant create --project ops --source manual
+shadow mcp grant preview GRANT_ID
+shadow mcp serve --grant GRANT_ID
+```
+
+Replace `GRANT_ID` with the ID printed by create. The last command is a local
+stdio server for a separately configured MCP host; it does not start a network
+listener. Its tools are read-only recall, recent context, extractive summaries,
+and current citation resolution. No grant means no memory reads. Run
+`shadow mcp grant revoke GRANT_ID` to stop later requests. Redaction remains
+best effort, and already shared text cannot be recalled from an assistant.
+See the [MCP sharing guide](MCP.md) for host arguments, limits, and the
+independent client test and a synthetic Codex CLI host walkthrough.
 
 ## If something goes wrong
 
@@ -159,6 +229,7 @@ client configuration that we have not verified end to end.
 | `shadow status` says `STOPPED` | This is normal for manual use. To start capture, review sources above, then run `shadow install` and `shadow enable`. |
 | `shadow enable` asks for capture choices | Run `shadow consent wizard`, or set both `clipboard` and `terminal_history` explicitly with `shadow consent set <source> on\|off`, then retry. |
 | `shadow enable` says the daemon source changed | Review the checkout update, run `shadow install` to refresh the local code baseline, then retry `shadow enable`. |
+| An existing master key cannot be unlocked | Retry from an unlocked macOS login session and inspect any Keychain access prompt. LatticeShadow leaves the key file and vault in place; do not remove them while checking recovery. |
 | Search says “No matching memories found” | The store is empty or the query found no match. Check `shadow timeline` for saved events. |
 | Search says “Search failed” | Search encountered an error. Read the error, then run `shadow doctor`; inspect the local daemon log if capture is involved. |
 | Old data reports an embedding-model mismatch | Stop capture with `shadow disable`, then run `shadow rebuild-index --yes`. It re-embeds saved events and creates a private database backup. Stop other writers during the rebuild. |

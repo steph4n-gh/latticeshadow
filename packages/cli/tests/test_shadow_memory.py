@@ -224,15 +224,17 @@ class TestDreamer:
 
 class TestLLMClient:
     def test_from_config_returns_none_when_no_provider(self, tmp_path, monkeypatch):
-        """from_config returns None when provider is 'none' and no LM Studio."""
+        """Provider 'none' never probes or sends data to a local LLM service."""
         import latticeshadow.config as cfg
         from latticeshadow.llm import ShadowLLM
 
         monkeypatch.setattr(cfg, "CONFIG_PATH", str(tmp_path / "config.toml"))
         monkeypatch.setattr(cfg, "LOG_DIR", str(tmp_path))
 
-        # Mock is_reachable to return False (no LM Studio)
-        monkeypatch.setattr(ShadowLLM, "is_reachable", lambda self: False)
+        def unexpected_probe(self):
+            raise AssertionError("provider=none must not probe an LLM service")
+
+        monkeypatch.setattr(ShadowLLM, "is_reachable", unexpected_probe)
 
         result = ShadowLLM.from_config()
         assert result is None
@@ -426,10 +428,14 @@ class TestHotCache:
         
         mock_vault = MagicMock()
         mock_vault.count.return_value = 1
-        mock_vault.search.return_value.documents = ["fresh vault document"]
-        mock_vault.search.return_value.ids = ["fresh"]
-        mock_vault.search.return_value.scores = [0.9]
         monkeypatch.setattr("latticeshadow.shadow_cli.get_vault", lambda: mock_vault)
+        monkeypatch.setattr(
+            "latticeshadow.timeline.search_events",
+            lambda _vault, _query, *, limit: [{
+                "id": "fresh", "text": "fresh vault document",
+                "timestamp": "2026-09-22T12:00:00Z", "score": 0.9,
+            }],
+        )
         
         # Capture stdout for do_search
         from latticeshadow.shadow_cli import do_search

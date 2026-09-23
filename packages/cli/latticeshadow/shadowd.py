@@ -25,6 +25,7 @@ import socket
 import secrets
 import queue
 import threading
+from datetime import datetime, timedelta, timezone
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 from latticeshadow import config, consent
@@ -53,6 +54,38 @@ MAX_CONTENT_BYTES = 1_000_000
 MIN_CONTENT_CHARS = 3
 POLL_INTERVAL = 0.5  # seconds
 AUTO_CONSOLIDATE_THRESHOLD = 500  # trigger REM sleep every N new entries
+
+
+def _clipboard_change_count(pasteboard):
+    try:
+        return pasteboard.changeCount()
+    except Exception:
+        return None
+
+
+def _clipboard_baseline(pasteboard):
+    before_enabled, before_epoch = consent.clipboard_state()
+    count = _clipboard_change_count(pasteboard)
+    enabled, epoch = consent.clipboard_state()
+    return count, bool(before_enabled and enabled and before_epoch == epoch and count is not None), epoch
+
+
+def _clipboard_sample_still_valid(pasteboard, sampled_count, sampled_epoch):
+    enabled, epoch = consent.clipboard_state()
+    return (enabled and epoch == sampled_epoch
+            and _clipboard_change_count(pasteboard) == sampled_count)
+
+
+def _new_consented_clipboard_change(
+        current_count, enabled, epoch, last_count, was_enabled, last_epoch):
+    """Read changes only after a count baseline inside the current consent epoch."""
+    if not enabled:
+        return False, current_count if current_count is not None else last_count, False, epoch
+    if current_count is None:
+        return False, last_count, False, epoch
+    if not was_enabled or last_count is None or epoch != last_epoch:
+        return False, current_count, True, epoch
+    return current_count != last_count, current_count, True, epoch
 
 # Pasteboard types that signal "do not record" (password managers, transient copies)
 CONCEALED_TYPES = [
@@ -97,9 +130,10 @@ def _notify(title: str, message: str):
 def get_or_create_master_key() -> str:
     """
     Resolve the master key using a 3-tier waterfall:
-    1. macOS Keychain (preferred, hardware-backed on Apple Silicon via Secure Enclave)
+    1. macOS Keychain (hardware-backed when Secure Enclave key creation succeeds)
     2. Flat file at ~/.latticeshadow/.key (backward compatibility)
-    3. Generate new key → store in both Keychain and flat file (Enclave-wrapped)
+    3. Generate new key → store in both Keychain and flat file (keypair-wrapped
+       when available; the keypair may be software-backed)
     """
     import base64
     import hashlib
@@ -119,6 +153,8 @@ def get_or_create_master_key() -> str:
             return None
 
     # 1. Try Keychain first
+    stored = None
+    keychain_lookup_failed = False
     try:
         stored = keychain.retrieve_key()
         if stored:
@@ -128,16 +164,20 @@ def get_or_create_master_key() -> str:
             else:
                 # Fallback check for legacy plaintext key
                 if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                    wrapped = wrap_and_encode(stored)
-                    keychain.store_key(wrapped)
-                    key_file = get_key_file()
-                    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as f:
-                        f.write(wrapped)
-                    logger.info("Migrated legacy master key to Secure Enclave wrapped key.")
+                    try:
+                        wrapped = wrap_and_encode(stored)
+                        keychain.store_key(wrapped)
+                        key_file = get_key_file()
+                        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(wrapped)
+                        logger.info("Migrated legacy master key to a Keychain keypair-wrapped key.")
+                    except Exception:
+                        # The readable legacy key remains usable without migration.
+                        pass
                     return stored
     except Exception:
-        pass
+        keychain_lookup_failed = True
 
     # 2. Fall back to flat file
     key_file = get_key_file()
@@ -145,33 +185,51 @@ def get_or_create_master_key() -> str:
         with open(key_file, "r") as f:
             stored = f.read().strip()
         if stored:
-            unwrapped = decode_and_unwrap(stored)
+            is_raw_key = len(stored) == 64 and all(c in "0123456789abcdef" for c in stored)
+            if keychain_lookup_failed and not is_raw_key:
+                raise PermissionError(
+                    "Existing master key could not be unlocked. The key file was left unchanged; "
+                    "retry from an unlocked macOS login session."
+                )
+            unwrapped = None if keychain_lookup_failed else decode_and_unwrap(stored)
             if unwrapped:
                 try:
                     keychain.store_key(stored)
                 except Exception:
                     pass
                 return unwrapped
-            elif len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
-                wrapped = wrap_and_encode(stored)
+            elif is_raw_key:
                 try:
-                    keychain.store_key(wrapped)
+                    if not keychain_lookup_failed:
+                        wrapped = wrap_and_encode(stored)
+                        keychain.store_key(wrapped)
+                        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w") as f:
+                            f.write(wrapped)
+                        logger.info("Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 except Exception:
+                    # The readable legacy file remains usable without migration.
                     pass
-                fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w") as f:
-                    f.write(wrapped)
-                logger.info("Migrated flat-file legacy master key to Secure Enclave wrapped key.")
                 return stored
+        raise PermissionError(
+            "Existing master key could not be unlocked. The key file was left unchanged; "
+            "retry from an unlocked macOS login session."
+        )
+
+    if os.path.exists(get_db_path()) or stored or keychain_lookup_failed:
+        raise PermissionError(
+            "Existing vault or Keychain key cannot be unlocked. No new key was created; "
+            "check Keychain access from an unlocked macOS login session."
+        )
 
     # 3. Generate new key
     raw_key = hashlib.sha256(os.urandom(64)).hexdigest()
     try:
         wrapped_key = wrap_and_encode(raw_key)
-        enclave_wrapped = True
+        keypair_wrapped = True
     except Exception:
         wrapped_key = raw_key
-        enclave_wrapped = False
+        keypair_wrapped = False
         
     try:
         keychain.store_key(wrapped_key)
@@ -182,7 +240,7 @@ def get_or_create_master_key() -> str:
     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(wrapped_key)
-    logger.info("Generated master key at %s (Secure Enclave wrapped: %s)", key_file, enclave_wrapped)
+    logger.info("Generated master key at %s (Keychain keypair wrapped: %s)", key_file, keypair_wrapped)
     return raw_key
 
 
@@ -234,7 +292,7 @@ def handle_loop_and_speculative_fix(vault, logger, p2p_node=None):
                 except Exception as qe:
                     logger.warning("Failed to queue loop repair proposal: %s", qe)
                 
-                if p2p_node and config.get("sync.swarm_knowledge"):
+                if p2p_node and consent.surface_enabled("swarm_knowledge"):
                     logger.info("Swarm knowledge broadcast skipped: signed pairing is not configured.")
         except Exception as ge:
             logger.warning("Failed to generate speculative fix: %s", ge)
@@ -282,6 +340,101 @@ def mirror_to_hot_vault(hot_vault, document: str, doc_id: str, metadata: dict) -
         logger.warning("Hot index mirror failed for %s: %s", doc_id, e)
 
 
+def capture_allowed(event_type: str, text: str) -> bool:
+    from latticeshadow.timeline import should_capture
+
+    return should_capture(
+        text, event_type,
+        excluded_sources=config.get("inputs.excluded_sources") or (),
+        excluded_literals=config.get("inputs.excluded_literals") or (),
+    )
+
+
+def _terminal_history_step(watcher, was_enabled: bool, enabled: bool):
+    """Poll only commands added during an uninterrupted enabled interval."""
+    if not enabled:
+        return watcher, False, []
+
+    if watcher is None:
+        from latticeshadow.history_watcher import TerminalHistoryWatcher
+        watcher = TerminalHistoryWatcher()
+        watcher.skip_to_end()
+        return watcher, True, []
+
+    if not was_enabled:
+        watcher.skip_to_end()
+        return watcher, True, []
+
+    return watcher, True, watcher.poll()
+
+
+def store_captured_event(vault, hot_vault, event_type: str, text: str, *,
+                         timestamp=None, metadata: dict | None = None) -> str | None:
+    """Commit canonical capture first, then best-effort mirror its normalized form."""
+    from latticeshadow.timeline import add_event, get_events
+
+    if not capture_allowed(event_type, text):
+        return None
+
+    doc_id = add_event(
+        vault, event_type, text, source=event_type,
+        timestamp=timestamp, metadata=metadata,
+    )
+    chmod_collection_files(vault)
+    if hot_vault:
+        try:
+            event = get_events(vault, [doc_id])[0]
+            mirror_to_hot_vault(hot_vault, event["text"], doc_id, event["metadata"])
+        except Exception as exc:
+            logger.warning("Hot index mirror pending repair for %s: %s", doc_id, exc)
+    return doc_id
+
+
+def apply_retention(vault, hot_vault, *, now=None) -> dict:
+    """Delete aged events through the same canonical and hot forget paths."""
+    from latticeshadow.timeline import forget_events, iter_events
+    from latticeshadow.vaults import invalidate_holographic_indexes
+
+    days = config.get("retention.days") or 0
+    if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 36500:
+        raise ValueError("retention.days must be between 0 and 36500")
+    result = {"canonical_deleted": 0, "cleanup_errors": []}
+    if days == 0:
+        return result
+    boundary = ((now or datetime.now(timezone.utc)) - timedelta(days=days))
+    if boundary.tzinfo is None or boundary.utcoffset() is None:
+        raise ValueError("retention clock must include a timezone")
+    cutoff = boundary.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    batch = []
+
+    def remove_batch():
+        if not batch:
+            return
+        deleted = forget_events(vault, batch)
+        result["canonical_deleted"] += deleted["canonical_deleted"]
+        result["cleanup_errors"].extend(deleted["cleanup_errors"])
+        if hot_vault:
+            try:
+                hot = forget_events(hot_vault, batch)
+                result["cleanup_errors"].extend(hot["cleanup_errors"])
+            except Exception as exc:
+                result["cleanup_errors"].append(f"Hot index retention cleanup failed: {exc}")
+        batch.clear()
+
+    for event in iter_events(vault):
+        if event["timestamp"] < cutoff:
+            batch.append(event["id"])
+            if len(batch) == 500:
+                remove_batch()
+    remove_batch()
+    if result["canonical_deleted"]:
+        try:
+            invalidate_holographic_indexes(get_log_dir())
+        except OSError as exc:
+            result["cleanup_errors"].append(f"Derived memory cleanup failed: {exc}")
+    return result
+
+
 def run_daemon():
     pending = consent.pending_capture_sources()
     if pending:
@@ -308,25 +461,28 @@ def run_daemon():
             logger.warning("Integrity check skipped: %s", e)
 
     pasteboard = AppKit.NSPasteboard.generalPasteboard()
-    startup_events: list[str] = []
+    initial_change_count, initially_enabled, initial_epoch = _clipboard_baseline(pasteboard)
+    startup_events: list[tuple[str, int]] = []
     startup_lock = threading.Lock()
     startup_stop = threading.Event()
 
     def watch_startup_clipboard():
-        last_startup_count = -1
+        last_startup_count = initial_change_count
+        was_enabled = initially_enabled
+        last_epoch = initial_epoch
         while not startup_stop.is_set() and _running:
             try:
-                if not consent.capture_enabled("clipboard"):
-                    startup_stop.wait(POLL_INTERVAL)
-                    continue
-                current_count = pasteboard.changeCount() if hasattr(pasteboard, "changeCount") else 0
-                if current_count != last_startup_count:
-                    last_startup_count = current_count
+                current_count = _clipboard_change_count(pasteboard)
+                enabled, epoch = consent.clipboard_state()
+                changed, last_startup_count, was_enabled, last_epoch = _new_consented_clipboard_change(
+                    current_count, enabled, epoch, last_startup_count, was_enabled, last_epoch,
+                )
+                if changed:
                     if pasteboard.availableTypeFromArray_(CONCEALED_TYPES) is None:
                         content = pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
-                        if content:
+                        if content and _clipboard_sample_still_valid(pasteboard, current_count, epoch):
                             with startup_lock:
-                                startup_events.append(content)
+                                startup_events.append((content, epoch))
             except Exception:
                 pass
             startup_stop.wait(POLL_INTERVAL)
@@ -370,6 +526,15 @@ def run_daemon():
         except Exception as e:
             logger.warning("Hot index disabled: %s", e)
 
+    try:
+        retention = apply_retention(vault, hot_vault)
+        if retention["canonical_deleted"] or retention["cleanup_errors"]:
+            logger.info("Retention removed %d events; cleanup errors: %s",
+                        retention["canonical_deleted"], retention["cleanup_errors"])
+    except Exception as exc:
+        logger.error("Retention failed: %s", exc)
+    last_retention_run = time.monotonic()
+
     node_id = f"{socket.gethostname()}_{secrets.token_hex(4)}"
     p2p_node = None
 
@@ -378,12 +543,14 @@ def run_daemon():
     ignored_lock = threading.Lock()
 
     def on_sync_received(content, sender_id):
+        if not consent.surface_enabled("mesh_sync"):
+            return
         content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
         with ignored_lock:
             ignored_hashes.add(content_hash)
         sync_queue.put((content, content_hash))
 
-    if config.get("sync.mesh_sync"):
+    if consent.surface_enabled("mesh_sync"):
         p2p_node = LocalMeshNode(node_id, vault)
         p2p_node.register_sync_callback(on_sync_received)
         p2p_node.start()
@@ -393,7 +560,7 @@ def run_daemon():
 
     # Start Mobile API Server
     mobile_server = None
-    if config.get("mobile.enabled"):
+    if consent.surface_enabled("mobile_api"):
         mobile_host = config.get("mobile.host") or "127.0.0.1"
         mobile_port = config.get("mobile.port") or 5052
         mobile_server = MobileAPIServer(vault, host=mobile_host, port=int(mobile_port))
@@ -437,28 +604,20 @@ def run_daemon():
             pending_startup_events = list(startup_events)
             startup_events.clear()
 
-        for startup_content in pending_startup_events:
-            if not consent.capture_enabled("clipboard"):
-                break
+        for startup_content, startup_epoch in pending_startup_events:
             try:
                 content = startup_content.strip()
                 if MIN_CONTENT_CHARS < len(content) < MAX_CONTENT_BYTES:
                     content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
-                    if content_hash != last_content_hash:
-                        last_content_hash = content_hash
-                        doc_id = f"clip_{int(time.time() * 1000)}"
-                        vault.add(
-                            documents=[content],
-                            ids=[doc_id],
-                            metadatas=[{"source": "clipboard"}],
-                        )
-                        chmod_collection_files(vault)
-                        mirror_to_hot_vault(
-                            hot_vault,
-                            content,
-                            doc_id,
-                            {"source": "clipboard"},
-                        )
+                    if content_hash != last_content_hash and capture_allowed("clipboard", content):
+                        with config.mutation_lock():
+                            enabled, epoch = consent.clipboard_state()
+                            if not enabled or epoch != startup_epoch:
+                                continue
+                            doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
+                            if doc_id is None:
+                                continue
+                            last_content_hash = content_hash
                         if pot_chain:
                             pot_chain.append_event("clipboard", content)
                         try:
@@ -496,7 +655,7 @@ def run_daemon():
 
     # Start Ambient Context Monitor if enabled in configuration
     ambient_monitor = None
-    if config.get("inputs.ambient_context"):
+    if consent.surface_enabled("ambient_context"):
         try:
             from latticeshadow.ambient_monitor import AmbientContextMonitor
             ambient_monitor = AmbientContextMonitor(interval=5.0, pot_chain=pot_chain, vault=vault)
@@ -505,19 +664,20 @@ def run_daemon():
         except Exception as ae:
             logger.error("Failed to initialize Ambient Context Monitor: %s", ae)
             
-    # Start Autonomous OS Immune System
+    # Experimental background services require an explicit choice.
     immune_system = None
-    try:
-        from latticeshadow.immune_system import ImmuneSystem
-        immune_system = ImmuneSystem(pot_chain=pot_chain)
-        immune_system.start()
-        logger.info("Autonomous OS Immune System (AOIS) active.")
-    except Exception as ie:
-        logger.error("Failed to start Immune System: %s", ie)
+    if consent.surface_enabled("immune_scan"):
+        try:
+            from latticeshadow.immune_system import ImmuneSystem
+            immune_system = ImmuneSystem(pot_chain=pot_chain)
+            immune_system.start()
+            logger.info("Experimental dependency scan active.")
+        except Exception as ie:
+            logger.error("Failed to start dependency scan: %s", ie)
 
     # Start Auto-Doctor
     auto_doctor = None
-    if "pytest" not in sys.modules:
+    if "pytest" not in sys.modules and consent.surface_enabled("auto_doctor"):
         try:
             from latticeshadow.auto_doctor import AutoDoctorThread
             auto_doctor = AutoDoctorThread()
@@ -528,37 +688,27 @@ def run_daemon():
 
     # Start Semantic Swapper Daemon
     swapper_daemon = None
-    try:
-        from latticeshadow.virtual_swapper import SemanticSwapperDaemon
-        swapper_daemon = SemanticSwapperDaemon(vault=vault, pot_chain=pot_chain)
-        swapper_daemon.start()
-        logger.info("Holographic Virtual Swapper active.")
-    except Exception as sde:
-        logger.error("Failed to start Semantic Swapper Daemon: %s", sde)
-
-    # Setup history watcher if configured
-    history_watcher = None
-    from latticeshadow import config as cfg
-    if consent.capture_enabled("terminal_history"):
+    if consent.surface_enabled("semantic_swapper"):
         try:
-            try:
-                from latticeshadow.history_watcher import TerminalHistoryWatcher as HistoryWatcherClass
-            except ImportError:
-                from latticeshadow.history_watcher import HistoryWatcher as HistoryWatcherClass
-            history_watcher = HistoryWatcherClass()
-            logger.info("Terminal history capture active.")
-        except Exception as he:
-            logger.error("Failed to initialize Terminal history capture: %s", he)
+            from latticeshadow.virtual_swapper import SemanticSwapperDaemon
+            swapper_daemon = SemanticSwapperDaemon(vault=vault, pot_chain=pot_chain)
+            swapper_daemon.start()
+            logger.info("Experimental app snapshotting active.")
+        except Exception as sde:
+            logger.error("Failed to start app snapshotting: %s", sde)
+
+    # Terminal capture can be enabled during this daemon run. The watcher is
+    # created on that boundary and starts at EOF, so old commands stay excluded.
+    history_watcher = None
+    terminal_enabled_last = False
+    terminal_epoch_last = None
 
     replay_startup_events()
     startup_stop.set()
     startup_thread.join(timeout=0.2)
     replay_startup_events()
 
-    try:
-        last_change_count = pasteboard.changeCount() if hasattr(pasteboard, "changeCount") else 0
-    except Exception:
-        last_change_count = 0
+    last_change_count, was_clipboard_enabled, last_clipboard_epoch = _clipboard_baseline(pasteboard)
 
     if consent.capture_enabled("clipboard"):
         logger.info("Listening for clipboard events...")
@@ -570,6 +720,12 @@ def run_daemon():
 
     while _running:
         try:
+            if p2p_node and not consent.surface_enabled("mesh_sync"):
+                p2p_node.stop()
+                p2p_node = None
+            if mobile_server and not consent.surface_enabled("mobile_api"):
+                mobile_server.stop()
+                mobile_server = None
             # Check if master key has been destroyed (crypto-shred deletes both Keychain and file)
             key_available = os.path.exists(get_key_file())
             if not key_available:
@@ -580,17 +736,13 @@ def run_daemon():
             if not key_available:
                 raise PermissionError("Master key destroyed (crypto-shred detected).")
 
-            current_change_count = last_change_count
-            if hasattr(pasteboard, "changeCount"):
-                try:
-                    current_change_count = pasteboard.changeCount()
-                except Exception:
-                    pass
-            clipboard_enabled = consent.capture_enabled("clipboard")
-            if not clipboard_enabled:
-                last_change_count = current_change_count
-            if clipboard_enabled and current_change_count != last_change_count:
-                last_change_count = current_change_count
+            current_change_count = _clipboard_change_count(pasteboard)
+            clipboard_enabled, clipboard_epoch = consent.clipboard_state()
+            changed, last_change_count, was_clipboard_enabled, last_clipboard_epoch = _new_consented_clipboard_change(
+                current_change_count, clipboard_enabled, clipboard_epoch,
+                last_change_count, was_clipboard_enabled, last_clipboard_epoch,
+            )
+            if changed:
 
                 # Skip concealed/sensitive content (password managers)
                 if pasteboard.availableTypeFromArray_(CONCEALED_TYPES) is not None:
@@ -616,21 +768,15 @@ def run_daemon():
                                 last_content_hash = content_hash
                                 logger.info("Feedback loop prevented for hash: %s", content_hash)
                             else:
-                                if content_hash != last_content_hash:
-                                    last_content_hash = content_hash
-                                    doc_id = f"clip_{int(time.time() * 1000)}"
-                                    vault.add(
-                                        documents=[content],
-                                        ids=[doc_id],
-                                        metadatas=[{"source": "clipboard"}]
-                                    )
-                                    chmod_collection_files(vault)
-                                    mirror_to_hot_vault(
-                                        hot_vault,
-                                        content,
-                                        doc_id,
-                                        {"source": "clipboard"},
-                                    )
+                                if content_hash != last_content_hash and capture_allowed("clipboard", content):
+                                    with config.mutation_lock():
+                                        if not _clipboard_sample_still_valid(
+                                                pasteboard, current_change_count, clipboard_epoch):
+                                            continue
+                                        doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
+                                        if doc_id is None:
+                                            continue
+                                        last_content_hash = content_hash
                                     if pot_chain:
                                         pot_chain.append_event("clipboard", content)
                                     try:
@@ -652,7 +798,7 @@ def run_daemon():
                                         "Captured: %s (len: %d, total_new: %d)",
                                         doc_id, len(content), inserts_since_consolidation,
                                     )
-                                    if config.get("sync.mesh_sync") and p2p_node:
+                                    if consent.surface_enabled("mesh_sync") and p2p_node:
                                         p2p_node.broadcast_sync(content, doc_id)
 
                                     # Run Topological Loop Detection and speculative fix generation
@@ -695,58 +841,54 @@ def run_daemon():
                 except (UnicodeEncodeError, UnicodeDecodeError, UnicodeError, ValueError) as ue:
                     logger.warning("Ignored encoding error during pasteboard string retrieval: %s", ue)
 
-            # Poll terminal history
-            if history_watcher and consent.capture_enabled("terminal_history"):
-                try:
-                    new_cmds = history_watcher.poll()
-                    if new_cmds:
-                        for i, cmd in enumerate(new_cmds):
-                            cmd_text = cmd["text"]
-                            cmd_ts = cmd["timestamp"]
-                            doc_id = f"cmd_{int(time.time() * 1000)}_{i}"
-                            vault.add(
-                                documents=[cmd_text],
-                                ids=[doc_id],
-                                metadatas=[{
-                                    "source": "terminal",
-                                    "timestamp": cmd_ts
-                                }]
-                            )
-                            chmod_collection_files(vault)
-                            mirror_to_hot_vault(
-                                hot_vault,
-                                cmd_text,
-                                doc_id,
+            # Avoid touching history while disabled; on the next consented
+            # enable, seek to EOF before polling so old commands stay excluded.
+            try:
+                terminal_enabled, terminal_epoch = consent.terminal_history_state()
+                history_watcher, terminal_enabled_last, new_cmds = _terminal_history_step(
+                    history_watcher,
+                    terminal_enabled_last and terminal_epoch == terminal_epoch_last,
+                    terminal_enabled)
+                terminal_epoch_last = terminal_epoch
+                if new_cmds:
+                    for cmd in new_cmds:
+                        cmd_text = cmd["text"]
+                        cmd_ts = cmd["timestamp"]
+                        current_enabled, current_epoch = consent.terminal_history_state()
+                        if not current_enabled or current_epoch != terminal_epoch:
+                            break
+                        if not capture_allowed("terminal", cmd_text):
+                            continue
+                        doc_id = store_captured_event(
+                            vault, hot_vault, "terminal", cmd_text,
+                            timestamp=cmd_ts,
+                        )
+                        if pot_chain:
+                            pot_chain.append_event("terminal", cmd_text)
+                        try:
+                            from latticeshadow.audit_log import append_audit_event
+
+                            append_audit_event(
+                                "capture",
                                 {
                                     "source": "terminal",
-                                    "timestamp": cmd_ts
+                                    "doc_id": doc_id,
+                                    "content_hash": hashlib.sha256(
+                                        cmd_text.encode("utf-8", errors="replace")
+                                    ).hexdigest(),
                                 },
+                                data_dir=get_log_dir(),
                             )
-                            if pot_chain:
-                                pot_chain.append_event("terminal", cmd_text)
-                            try:
-                                from latticeshadow.audit_log import append_audit_event
+                        except Exception:
+                            pass
+                        inserts_since_consolidation += 1
+                        logger.info("Captured command: %s (total_new: %d)", doc_id, inserts_since_consolidation)
 
-                                append_audit_event(
-                                    "capture",
-                                    {
-                                        "source": "terminal",
-                                        "doc_id": doc_id,
-                                        "content_hash": hashlib.sha256(
-                                            cmd_text.encode("utf-8", errors="replace")
-                                        ).hexdigest(),
-                                    },
-                                    data_dir=get_log_dir(),
-                                )
-                            except Exception:
-                                pass
-                            inserts_since_consolidation += 1
-                            logger.info("Captured command: %s (total_new: %d)", doc_id, inserts_since_consolidation)
-                        
-                        # Run Topological Loop Detection and speculative fix generation
-                        handle_loop_and_speculative_fix(vault, logger, p2p_node)
-                except Exception as he:
-                    logger.warning("Error polling terminal history: %s", he)
+                    # Run Topological Loop Detection and speculative fix generation
+                    handle_loop_and_speculative_fix(vault, logger, p2p_node)
+            except Exception as he:
+                terminal_enabled_last = False
+                logger.warning("Error polling terminal history: %s", he)
 
             try:
                 sync_event = sync_queue.get(timeout=POLL_INTERVAL)
@@ -759,8 +901,18 @@ def run_daemon():
             except queue.Empty:
                 pass
 
+            if time.monotonic() - last_retention_run >= 3600:
+                last_retention_run = time.monotonic()
+                try:
+                    retention = apply_retention(vault, hot_vault)
+                    if retention["canonical_deleted"] or retention["cleanup_errors"]:
+                        logger.info("Retention removed %d events; cleanup errors: %s",
+                                    retention["canonical_deleted"], retention["cleanup_errors"])
+                except Exception as exc:
+                    logger.error("Retention failed: %s", exc)
+
             # Periodically execute iCloud Sync if enabled
-            if config.get("sync.icloud_sync"):
+            if consent.surface_enabled("icloud_sync"):
                 current_time = time.time()
                 if current_time - last_sync_time >= SYNC_INTERVAL:
                     last_sync_time = current_time

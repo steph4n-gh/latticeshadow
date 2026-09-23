@@ -27,16 +27,27 @@ def embedding_model_id() -> str:
     return f"{EMBEDDING_MODEL}@{EMBEDDING_REVISION}:{EMBEDDING_DIM}"
 
 
-@lru_cache(maxsize=1)
-def _local_model():
+@lru_cache(maxsize=2)
+def _load_model(bundle_path: str | None):
     from sentence_transformers import SentenceTransformer
 
+    if bundle_path:
+        return SentenceTransformer(
+            bundle_path,
+            local_files_only=True,
+            truncate_dim=EMBEDDING_DIM,
+            device="cpu",
+        )
     return SentenceTransformer(
         EMBEDDING_MODEL,
         revision=EMBEDDING_REVISION,
         truncate_dim=EMBEDDING_DIM,
         device="cpu",
     )
+
+
+def _local_model():
+    return _load_model(os.environ.get("LATTICESHADOW_BUNDLED_MODEL") or None)
 
 
 def embed_text(text: str):
@@ -61,6 +72,8 @@ def vault_file_paths(db_path: str, collection: str = MAIN_COLLECTION) -> list[st
         db_path + "-shm",
         f"{db_path}_{collection}_vectors.bin",
         f"{db_path}_{collection}_vectors.bin.lock",
+        f"{db_path}_{collection}_vectors.meta.json",
+        f"{db_path}_{collection}_vectors.meta.json.tmp",
         f"{db_path}_{collection}_rerank_vectors.bin",
         f"{db_path}_{collection}_rerank_vectors.bin.lock",
         f"{db_path}_{collection}_pq_codes.bin",

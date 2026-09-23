@@ -104,7 +104,8 @@ def test_document_encryption_survives_rotation_and_is_not_master_derived(tmp_pat
         ).fetchone()[0]
 
     assert stored_document.startswith("enc:v2:")
-    assert PrivacyEngine(dim=4, master_key="old-master").decrypt_document(stored_document) == stored_document
+    with pytest.raises(ValueError, match="decrypt"):
+        PrivacyEngine(dim=4, master_key="old-master").decrypt_document(stored_document)
 
     collection.rotate_master_key("new-master")
     reloaded = Collection(
@@ -128,7 +129,8 @@ def test_document_encryption_survives_rotation_and_is_not_master_derived(tmp_pat
         )
 
     reloaded.crypto_shred()
-    assert PrivacyEngine(dim=4, master_key="new-master").decrypt_document(stored_document) == stored_document
+    with pytest.raises(ValueError, match="decrypt"):
+        PrivacyEngine(dim=4, master_key="new-master").decrypt_document(stored_document)
 
 
 def test_privacy_auto_distill_encrypts_persisted_pairs(tmp_path):

@@ -39,18 +39,13 @@ def dream_cycle(vault, log=None):
     cfg = config.load_config()
     memory_cfg = cfg.get("memory", {})
 
-    # Check if memory features are enabled
+    # LLM enrichment requires an explicitly selected provider.
     provider = memory_cfg.get("provider", "none")
-    if provider == "none":
-        # Still try auto-detect of LM Studio
-        llm = ShadowLLM.from_config()
-        if llm is None:
-            return  # No LLM available, skip silently
-    else:
-        llm = ShadowLLM.from_config()
-        if llm is None:
+    llm = ShadowLLM.from_config()
+    if llm is None:
+        if provider != "none":
             log.warning("Dream cycle: LLM not available (provider=%s)", provider)
-            return
+        return
 
     batch_size = memory_cfg.get("dream_batch_size", 50)
     use_sensitivity_filter = memory_cfg.get("sensitivity_filter", True)

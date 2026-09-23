@@ -7,6 +7,8 @@ import plistlib
 import threading
 import subprocess
 import sqlite3
+import json
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from contextlib import contextmanager
 
@@ -160,6 +162,80 @@ def choose_capture_sources(clipboard=True, terminal_history=False):
     set_consent("clipboard", clipboard)
     set_consent("terminal_history", terminal_history)
 
+
+def test_terminal_history_pause_and_reenable_skip_disabled_commands(setup_test_env, tmp_path, monkeypatch):
+    """A running daemon must capture only commands from an enabled interval."""
+    shadowd = setup_test_env["shadowd"]
+    histfile = tmp_path / "synthetic_zsh_history"
+    histfile.write_text("git status --before-start\n", encoding="utf-8")
+    monkeypatch.setenv("HISTFILE", str(histfile))
+
+    def append(command):
+        with histfile.open("a", encoding="utf-8") as history:
+            history.write(command + "\n")
+
+    watcher, active, entries = shadowd._terminal_history_step(None, False, True)
+    assert active and entries == []
+    append("git commit --active-one")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert [entry["text"] for entry in entries] == ["git commit --active-one"]
+
+    append("git commit --paused-one")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, False)
+    assert not active and entries == []
+    append("git commit --paused-two")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, False)
+    assert not active and entries == []
+    append("git commit --before-resume-poll")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert active and entries == []
+    append("git commit --active-two")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert [entry["text"] for entry in entries] == ["git commit --active-two"]
+
+
+def test_terminal_history_can_enable_after_daemon_started_disabled(setup_test_env, tmp_path, monkeypatch):
+    shadowd = setup_test_env["shadowd"]
+    histfile = tmp_path / "synthetic_zsh_history"
+    histfile.write_text("git status --while-off\n", encoding="utf-8")
+    monkeypatch.setenv("HISTFILE", str(histfile))
+
+    watcher, active, entries = shadowd._terminal_history_step(None, False, False)
+    assert watcher is None and not active and entries == []
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert watcher is not None and active and entries == []
+    with histfile.open("a", encoding="utf-8") as history:
+        history.write("git status --after-enable\n")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
+    assert [entry["text"] for entry in entries] == ["git status --after-enable"]
+
+
+def test_rapid_pause_resume_between_polls_discards_history(setup_test_env, tmp_path, monkeypatch):
+    from latticeshadow import consent
+
+    shadowd = setup_test_env["shadowd"]
+    histfile = tmp_path / "synthetic_zsh_history"
+    histfile.write_text("git status --before-start\n", encoding="utf-8")
+    monkeypatch.setenv("HISTFILE", str(histfile))
+    choose_capture_sources(clipboard=False, terminal_history=True)
+    enabled, old_epoch = consent.terminal_history_state()
+    assert enabled
+    watcher, active, _ = shadowd._terminal_history_step(None, False, enabled)
+
+    consent.set_paused(True)
+    with histfile.open("a", encoding="utf-8") as history:
+        history.write("git status --during-rapid-pause\n")
+    consent.set_paused(False)
+    enabled, new_epoch = consent.terminal_history_state()
+    assert enabled and new_epoch == old_epoch + 2
+    watcher, active, entries = shadowd._terminal_history_step(
+        watcher, active and new_epoch == old_epoch, enabled)
+    assert active and entries == []
+    with histfile.open("a", encoding="utf-8") as history:
+        history.write("git status --after-resume\n")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, enabled)
+    assert [entry["text"] for entry in entries] == ["git status --after-resume"]
+
 # --- CLI Command Lifecycle Tests ---
 
 def test_capture_requires_explicit_choices_before_enable(setup_test_env, monkeypatch):
@@ -212,6 +288,12 @@ def test_config_command_records_capture_choice(setup_test_env):
     with pytest.raises(SystemExit, match=r"Use on\|off"):
         run_cli(cli, ["config", "set", "inputs.terminal_history", "maybe"])
     assert consent.pending_capture_sources() == ["terminal_history"]
+    consent.set_consent("terminal_history", False)
+    _, before_epoch = consent.clipboard_state()
+    run_cli(cli, ["config", "set", "inputs.paused", "true"])
+    assert consent.clipboard_state() == (False, before_epoch + 1)
+    run_cli(cli, ["config", "set", "inputs.paused", "false"])
+    assert consent.clipboard_state() == (True, before_epoch + 2)
 
 
 def test_search_distinguishes_empty_results_from_errors(setup_test_env, monkeypatch, capsys):
@@ -243,9 +325,142 @@ def test_cli_remember_initializes_store_without_capture(setup_test_env):
     assert not os.path.exists(setup_test_env["zshrc_path"])
     from latticeshadow.timeline import fetch_events
 
-    events = fetch_events(cli.get_vault())
+    events = fetch_events(cli.get_vault())["events"]
     assert len(events) == 1
     assert events[0]["text"] == "Check release tests"
+
+
+def test_cli_timeline_scopes_and_explicit_project_assignment(setup_test_env, capsys):
+    from latticeshadow.timeline import fetch_events
+
+    cli = setup_test_env["shadow_cli"]
+    run_cli(cli, ["remember", "note", "deployment rollback", "--project", "ops",
+                  "--timestamp", "2026-09-17T12:00:00Z"])
+    run_cli(cli, ["remember", "note", "deployment rollback", "--project", "other",
+                  "--timestamp", "2026-09-18T12:00:00Z"])
+    run_cli(cli, ["remember", "note", "deployment rollback",
+                  "--timestamp", "2026-09-17T13:00:00Z"])
+    capsys.readouterr()
+
+    events = fetch_events(cli.get_vault())["events"]
+    unassigned_id = next(event["id"] for event in events if event["project"] is None)
+    run_cli(cli, ["timeline", "--query", "deployment", "--project", "ops",
+                  "--source", "note", "--since", "2026-09-17T00:00:00Z",
+                  "--until", "2026-09-18T00:00:00Z", "--json"])
+    result = json.loads(capsys.readouterr().out)
+    assert len(result["events"]) == 1
+    assert result["events"][0]["project"] == "ops"
+    assert result["events"][0]["timestamp"] == "2026-09-17T12:00:00.000000Z"
+
+    run_cli(cli, ["assign-project", "--id", unassigned_id, "--project", "ops"])
+    capsys.readouterr()
+    run_cli(cli, ["timeline", "--unassigned", "--json"])
+    assert json.loads(capsys.readouterr().out)["events"] == []
+
+
+def test_terminal_capture_uses_original_time_and_mirrors_provenance(setup_test_env):
+    from latticeshadow.timeline import get_events
+    from latticeshadow.vaults import open_hot_vault, open_main_vault
+
+    cli = setup_test_env["shadow_cli"]
+    shadowd = setup_test_env["shadowd"]
+    key = cli.get_or_create_master_key()
+    main = open_main_vault(str(setup_test_env["db_path"]), key)
+    hot = open_hot_vault(str(setup_test_env["db_path"]), key)
+    occurred = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+
+    doc_id = shadowd.store_captured_event(
+        main, hot, "terminal", "pytest -q", timestamp=occurred.timestamp(),
+    )
+
+    event = get_events(main, [doc_id])[0]
+    mirror = get_events(hot, [doc_id])[0]
+    assert event["timestamp"] == "2026-09-17T12:00:00.000000Z"
+    assert event["captured_at"] >= event["timestamp"]
+    assert event["source"] == "terminal"
+    assert mirror["metadata"] == event["metadata"]
+    assert mirror["text"] == event["text"]
+
+
+def test_capture_exclusions_and_retention_delete_canonical_and_hot(setup_test_env):
+    from latticeshadow import config
+    from latticeshadow.timeline import add_event, get_events
+    from latticeshadow.vaults import open_hot_vault, open_main_vault
+
+    cli = setup_test_env["shadow_cli"]
+    daemon = setup_test_env["shadowd"]
+    key = cli.get_or_create_master_key()
+    path = str(setup_test_env["db_path"])
+    main = open_main_vault(path, key)
+    hot = open_hot_vault(path, key)
+    config.set("inputs.excluded_sources", '["terminal"]')
+    config.set("inputs.excluded_literals", '["SECRET_MARKER"]')
+    assert daemon.store_captured_event(main, hot, "terminal", "safe text") is None
+    assert daemon.store_captured_event(main, hot, "clipboard", "secret_marker value") is None
+    assert main.count() == 0
+
+    old = add_event(main, "note", "old note", source="manual",
+                    timestamp="2026-09-01T00:00:00Z")
+    hot.add(documents=["old note"], ids=[old], metadatas=[{"source": "manual"}])
+    config.set("retention.days", "7")
+    result = daemon.apply_retention(main, hot, now=datetime(2026, 9, 22, tzinfo=timezone.utc))
+    assert result == {"canonical_deleted": 1, "cleanup_errors": []}
+    assert get_events(main, [old]) == []
+    assert get_events(hot, [old]) == []
+
+
+def test_backup_cli_restore_isolated_from_live_key(setup_test_env, monkeypatch, tmp_path, capsys):
+    from latticeshadow.timeline import add_event, get_events
+
+    cli = setup_test_env["shadow_cli"]
+    live = cli.get_vault(create_if_missing=True)
+    event_id = add_event(live, "note", "recover this", source="manual")
+    original_key = setup_test_env["key_file"].read_bytes()
+    archive = tmp_path / "portable.lsb"
+    destination = tmp_path / "recovered"
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _prompt: "long backup passphrase")
+    run_cli(cli, ["backup", "export", str(archive)])
+    run_cli(cli, ["backup", "restore", str(archive), "--destination", str(destination)])
+    run_cli(cli, ["backup", "inspect", "--destination", str(destination)])
+    assert "Restored vault verified: 1 event(s)" in capsys.readouterr().out
+    assert get_events(cli._restored_vault(destination), [event_id])[0]["text"] == "recover this"
+    assert setup_test_env["key_file"].read_bytes() == original_key
+    assert destination.joinpath(".key").stat().st_mode & 0o077 == 0
+
+
+def test_mcp_grant_cli_requires_explicit_scope_and_revokes(setup_test_env, capsys):
+    cli = setup_test_env["shadow_cli"]
+    run_cli(cli, ["remember", "note", "synthetic deployment note", "--project", "ops",
+                  "--source", "manual"])
+    capsys.readouterr()
+    with pytest.raises(SystemExit, match="Choose at least one"):
+        run_cli(cli, ["mcp", "grant", "create", "--source", "manual"])
+    run_cli(cli, ["mcp", "grant", "create", "--project", "ops", "--source", "manual"])
+    grant = json.loads(capsys.readouterr().out)
+    grant_id = grant["id"]
+    run_cli(cli, ["mcp", "grant", "preview", grant_id])
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["count"] == 1
+    assert preview["events"][0]["project"] == "ops"
+    run_cli(cli, ["mcp", "grant", "revoke", grant_id])
+    assert "Revoked grant" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="Grant not found"):
+        run_cli(cli, ["mcp", "serve", "--grant", grant_id])
+
+
+def test_open_context_only_opens_supported_targets(setup_test_env, monkeypatch):
+    cli = setup_test_env["shadow_cli"]
+    monkeypatch.setattr(cli, "get_vault", lambda: object())
+    monkeypatch.setattr(
+        "latticeshadow.timeline.search_events",
+        lambda _vault, _query, *, limit: [
+            {"metadata": {"url": "javascript:alert(1)"}, "text": ""},
+            {"metadata": {"url": "https://example.com/help"}, "text": ""},
+        ],
+    )
+    with patch("subprocess.run") as opener:
+        run_cli(cli, ["open-context", "help"])
+    opener.assert_called_once_with(["open", "https://example.com/help"], check=False)
 
 
 def test_cli_install(setup_test_env, mock_subprocess_run, capsys):
@@ -284,6 +499,16 @@ def test_cli_install(setup_test_env, mock_subprocess_run, capsys):
     )
     assert not (setup_test_env["log_dir"] / "latticeshadow.zsh").exists()
     assert not setup_test_env["zshrc_path"].exists()
+
+
+def test_app_install_launches_bundled_daemon(setup_test_env, mock_subprocess_run, monkeypatch):
+    cli = setup_test_env["shadow_cli"]
+    executable = "/Applications/LatticeShadow.app/Contents/MacOS/LatticeShadow"
+    # py2app reports its helper as sys.executable from inside the app.
+    monkeypatch.setattr(cli.sys, "executable", "/Applications/LatticeShadow.app/Contents/MacOS/python")
+    cli.do_install()
+    with open(setup_test_env["plist_path"], "rb") as stream:
+        assert plistlib.load(stream)["ProgramArguments"] == [executable, "--daemon"]
 
 def test_cli_install_idempotency(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
@@ -444,6 +669,8 @@ def test_cli_status(setup_test_env, mock_subprocess_run, capsys):
     
     # Mock launchctl to return stopped status
     mock_res = MagicMock()
+    mock_res.returncode = 0
+    mock_res.stderr = ""
     mock_res.stdout = "other.job.label\n"
     mock_subprocess_run.return_value = mock_res
     
@@ -482,6 +709,162 @@ def test_cli_status(setup_test_env, mock_subprocess_run, capsys):
     assert "RUNNING" in out
     assert str(setup_test_env["db_path"]) in out
     assert "Entries:  1" in out
+
+
+def test_capture_pause_persists_without_changing_source_choices(setup_test_env):
+    from latticeshadow import config, consent
+
+    cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    assert consent.capture_enabled("clipboard") is True
+
+    run_cli(cli, ["pause"])
+    assert config.get("inputs.paused") is True
+    assert config.get("inputs.clipboard") is True
+    assert consent.capture_enabled("clipboard") is False
+    assert consent.consent_status()["surfaces"]["clipboard"]["needs_consent"] is False
+
+    # Simulate a new process reading the config after restart.
+    import importlib
+    importlib.reload(config)
+    assert consent.consent_status()["paused"] is True
+    assert consent.capture_enabled("clipboard") is False
+
+    run_cli(cli, ["resume"])
+    assert config.get("inputs.paused") is False
+    assert consent.capture_enabled("clipboard") is True
+
+
+def test_concurrent_source_change_cannot_undo_pause(setup_test_env, monkeypatch):
+    from latticeshadow import config, consent
+
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    read_started = threading.Event()
+    release_read = threading.Event()
+    pause_done = threading.Event()
+    errors = []
+    original_load = config.load_config
+
+    def blocked_load():
+        cfg = original_load()
+        if threading.current_thread().name == "source-change":
+            read_started.set()
+            if not release_read.wait(5):
+                raise TimeoutError("test did not release source change")
+        return cfg
+
+    monkeypatch.setattr(config, "load_config", blocked_load)
+
+    def change_source():
+        try:
+            consent.set_consent("terminal_history", True)
+        except Exception as exc:
+            errors.append(exc)
+
+    def pause():
+        try:
+            consent.set_paused(True)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            pause_done.set()
+
+    changer = threading.Thread(target=change_source, name="source-change")
+    pauser = threading.Thread(target=pause, name="pause-capture")
+    changer.start()
+    assert read_started.wait(5)
+    pauser.start()
+    assert not pause_done.wait(0.1)
+    release_read.set()
+    changer.join(5)
+    pauser.join(5)
+    assert not changer.is_alive() and not pauser.is_alive() and not errors
+    assert config.get("inputs.paused") is True
+    assert config.get("inputs.terminal_history") is True
+    assert consent.capture_enabled("terminal_history") is False
+
+
+def test_resume_requires_recorded_source_choices(setup_test_env):
+    from latticeshadow import config, consent
+
+    cli = setup_test_env["shadow_cli"]
+    run_cli(cli, ["pause"])
+    with pytest.raises(SystemExit, match="Choose capture sources"):
+        run_cli(cli, ["resume"])
+    assert config.get("inputs.paused") is True
+    assert consent.capture_enabled("clipboard") is False
+
+
+def test_interrupted_config_write_preserves_capture_choices(setup_test_env, monkeypatch):
+    from latticeshadow import config, consent
+
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    original = (setup_test_env["log_dir"] / "config.toml").read_bytes()
+
+    def fail_replace(_source, _destination):
+        raise OSError("simulated power loss before replacement")
+
+    monkeypatch.setattr(config.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated power loss"):
+        consent.set_paused(True)
+
+    assert (setup_test_env["log_dir"] / "config.toml").read_bytes() == original
+    assert consent.capture_enabled("clipboard") is True
+    assert not list(setup_test_env["log_dir"].glob(".config-*.tmp"))
+
+
+def test_capture_status_uses_real_daemon_and_pause_state(setup_test_env, mock_subprocess_run):
+    from latticeshadow import consent
+    from latticeshadow.capture_state import get_status
+
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    mock_subprocess_run.return_value.stdout = "321 0 com.latticedb.shadow\n"
+    status = get_status()
+    assert status["state"] == "capturing"
+    assert status["sources"]["clipboard"]["capturing"] is True
+
+    consent.set_paused(True)
+    status = get_status()
+    assert status["state"] == "paused"
+    assert status["sources"]["clipboard"]["capturing"] is False
+
+    mock_subprocess_run.return_value.returncode = 1
+    mock_subprocess_run.return_value.stderr = "launchctl unavailable"
+    status = get_status()
+    assert status["daemon_running"] is None
+    assert status["state"] == "unavailable"
+
+
+def test_optional_services_require_recorded_consent(setup_test_env):
+    from latticeshadow import config, consent
+
+    for name in ("ambient_context", "mobile_api", "mesh_sync", "swarm_knowledge", "icloud_sync",
+                 "immune_scan", "semantic_swapper", "auto_doctor"):
+        key = consent.SURFACES[name]["config_key"]
+        config.set(key, "true")
+        assert consent.surface_enabled(name) is False
+        consent.set_consent(name, True)
+        assert consent.surface_enabled(name) is True
+
+    consent.set_paused(True)
+    assert consent.surface_enabled("ambient_context") is False
+    assert consent.surface_enabled("semantic_swapper") is False
+    assert consent.surface_enabled("immune_scan") is True
+
+
+def test_capture_wizard_prompts_only_for_sources(setup_test_env):
+    from latticeshadow import consent
+
+    prompts = []
+    answers = iter(("y", "n"))
+    consent.run_wizard(
+        input_fn=lambda prompt: (prompts.append(prompt), next(answers))[1],
+        output_fn=lambda _message: None,
+    )
+    assert len(prompts) == 2
+    assert consent.capture_enabled("clipboard") is True
+    assert consent.capture_enabled("terminal_history") is False
+    assert consent.surface_enabled("immune_scan") is False
 
 def test_cli_search_paste(setup_test_env, capsys, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
@@ -537,10 +920,307 @@ def test_cli_shred(setup_test_env, capsys):
     run_cli(cli, ["shred"], mock_input="SHRED")
     out, err = capsys.readouterr()
     assert "SUCCESS" in out
+    assert "entire local memory vault" in out
+    assert "including notes, terminal records, and captured clipboard entries" in out
     
     # Connection should now fail
     with pytest.raises(SystemExit):
         cli.get_vault()
+
+
+def test_shred_reports_locked_keychain_without_false_deletion_claim(
+        setup_test_env, monkeypatch, capsys):
+    from latticeshadow import keychain
+
+    cli = setup_test_env["shadow_cli"]
+    shredded = []
+
+    class StubVault:
+        def crypto_shred(self):
+            shredded.append(True)
+
+    def locked():
+        raise keychain.KeychainLocked("login keychain locked")
+
+    monkeypatch.setattr(cli, "get_vault", lambda: StubVault())
+    monkeypatch.setattr(cli, "hot_collection_exists", lambda _path: False)
+    monkeypatch.setattr(keychain, "delete_key", locked)
+    run_cli(cli, ["shred"], mock_input="SHRED")
+    out = capsys.readouterr().out
+    assert shredded == [True]
+    assert "Vault crypto-shred completed" in out
+    assert "Keychain entry could not be removed" in out
+    assert "Keychain entry destroyed" not in out
+
+
+def test_doctor_does_not_recommend_shred_for_vault_open_error(
+        setup_test_env, monkeypatch, capsys):
+    cli = setup_test_env["shadow_cli"]
+    setup_test_env["db_path"].write_bytes(b"disposable vault fixture")
+
+    def unavailable_vault():
+        raise RuntimeError("simulated Keychain access failure")
+
+    monkeypatch.setattr(cli, "get_vault", unavailable_vault)
+    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kwargs: MagicMock(stdout="", stderr="", returncode=0))
+    cli.do_doctor()
+    out = capsys.readouterr().out
+    assert "Failed to open database" in out
+    assert "keep the vault and key intact" in out
+    assert "shadow shred" not in out
+
+
+def test_existing_wrapped_key_is_never_replaced_when_keychain_unavailable(setup_test_env, monkeypatch):
+    from latticeshadow import security
+
+    cli = setup_test_env["shadow_cli"]
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text("existing-wrapped-key", encoding="ascii")
+    setup_test_env["db_path"].write_bytes(b"existing vault fixture")
+    original = key_file.read_bytes()
+    def keychain_locked(*_args):
+        raise PermissionError("Keychain locked")
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave", keychain_locked)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not generate a replacement key"))
+
+    with pytest.raises(PermissionError, match="Existing master key could not be unlocked"):
+        cli.get_or_create_master_key()
+    assert key_file.read_bytes() == original
+    assert setup_test_env["db_path"].read_bytes() == b"existing vault fixture"
+
+
+def test_existing_vault_without_key_refuses_new_key(setup_test_env, monkeypatch):
+    from latticeshadow import security
+
+    cli = setup_test_env["shadow_cli"]
+    setup_test_env["log_dir"].mkdir(parents=True, exist_ok=True)
+    setup_test_env["db_path"].write_bytes(b"existing vault fixture")
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not generate a replacement key"))
+
+    with pytest.raises(PermissionError, match="No new key was created"):
+        cli.get_or_create_master_key()
+    assert not setup_test_env["key_file"].exists()
+
+
+def test_keychain_command_timeout_reports_locked_keychain(monkeypatch):
+    import subprocess
+    from latticeshadow import keychain
+
+    def waits_for_login(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="security", timeout=10)
+
+    monkeypatch.setattr(keychain.subprocess, "run", waits_for_login)
+    with pytest.raises(keychain.KeychainLocked, match="timed out"):
+        keychain._run_security(["find-generic-password"])
+
+
+@pytest.mark.parametrize("component", ["shadow_cli", "shadowd"])
+def test_locked_keychain_fails_fast_without_unwrapping_file(
+        setup_test_env, monkeypatch, component):
+    from latticeshadow import keychain, security
+
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text("existing-wrapped-key", encoding="ascii")
+    original = key_file.read_bytes()
+
+    def locked():
+        raise keychain.KeychainLocked("locked")
+
+    monkeypatch.setattr(keychain, "retrieve_key", locked)
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not wait for locked Keychain"))
+    with pytest.raises(PermissionError, match="Existing master key could not be unlocked"):
+        setup_test_env[component].get_or_create_master_key()
+    assert key_file.read_bytes() == original
+
+
+@pytest.mark.parametrize("component", ["shadow_cli", "shadowd"])
+def test_locked_keychain_still_reads_legacy_raw_file(
+        setup_test_env, monkeypatch, component):
+    from latticeshadow import keychain, security
+
+    raw_key = "a" * 64
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text(raw_key, encoding="ascii")
+
+    def locked():
+        raise keychain.KeychainLocked("locked")
+
+    monkeypatch.setattr(keychain, "retrieve_key", locked)
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not wait for locked Keychain"))
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("must not migrate while locked"))
+    assert setup_test_env[component].get_or_create_master_key() == raw_key
+    assert key_file.read_text(encoding="ascii") == raw_key
+
+
+def test_key_migration_notice_does_not_break_json_stdout(
+        setup_test_env, monkeypatch, capsys):
+    from latticeshadow import security
+
+    raw_key = "a" * 64
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text(raw_key, encoding="ascii")
+
+    def no_old_key(*_args):
+        raise PermissionError("no old wrapping key")
+
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave", no_old_key)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave", lambda *_args: b"wrapped")
+    assert setup_test_env["shadow_cli"].get_or_create_master_key() == raw_key
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "Migrated flat-file legacy master key" in err
+
+
+def test_missing_vault_error_leaves_stdout_clear(setup_test_env, capsys):
+    cli = setup_test_env["shadow_cli"]
+    with pytest.raises(SystemExit, match="LatticeShadow database not found"):
+        cli.get_vault()
+    assert capsys.readouterr().out == ""
+
+
+def test_wrong_vault_key_error_leaves_stdout_clear(setup_test_env, monkeypatch, capsys):
+    cli = setup_test_env["shadow_cli"]
+    setup_test_env["db_path"].parent.mkdir(parents=True, exist_ok=True)
+    setup_test_env["db_path"].write_bytes(b"encrypted vault fixture")
+    monkeypatch.setattr(cli, "get_or_create_master_key", lambda: "a" * 64)
+
+    def refuses_wrong_key(**_kwargs):
+        raise PermissionError("wrong key")
+
+    monkeypatch.setattr(cli, "open_main_vault", refuses_wrong_key)
+    with pytest.raises(SystemExit, match="Cannot decrypt the existing vault"):
+        cli.get_vault()
+    assert capsys.readouterr().out == ""
+
+
+def test_daemon_refuses_to_replace_inaccessible_existing_key(setup_test_env, monkeypatch):
+    from latticeshadow import security
+
+    daemon = setup_test_env["shadowd"]
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text("existing-wrapped-key", encoding="ascii")
+    setup_test_env["db_path"].write_bytes(b"existing vault fixture")
+    original = key_file.read_bytes()
+
+    def keychain_locked(*_args):
+        raise PermissionError("Keychain locked")
+
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave", keychain_locked)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("daemon must not generate a replacement key"))
+    with pytest.raises(PermissionError, match="Existing master key could not be unlocked"):
+        daemon.get_or_create_master_key()
+    assert key_file.read_bytes() == original
+    assert setup_test_env["db_path"].read_bytes() == b"existing vault fixture"
+
+
+def test_daemon_can_still_create_key_for_empty_profile(setup_test_env, monkeypatch):
+    from latticeshadow import security
+
+    daemon = setup_test_env["shadowd"]
+    setup_test_env["log_dir"].mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave", lambda *_args: b"wrapped")
+    key = daemon.get_or_create_master_key()
+    assert len(key) == 64
+    assert setup_test_env["key_file"].read_text() == "d3JhcHBlZA=="
+
+
+@pytest.mark.parametrize("component", ["shadow_cli", "shadowd"])
+@pytest.mark.parametrize("source", ["keychain", "file"])
+def test_legacy_key_remains_usable_when_wrapping_is_unavailable(
+        setup_test_env, monkeypatch, component, source):
+    from latticeshadow import keychain, security
+
+    raw_key = "a" * 64
+    key_file = setup_test_env["key_file"]
+    if source == "keychain":
+        monkeypatch.setattr(keychain, "retrieve_key", lambda: raw_key)
+    else:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(raw_key, encoding="ascii")
+
+    def unavailable(*_args):
+        raise PermissionError("unavailable")
+
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave", unavailable)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave", unavailable)
+    assert setup_test_env[component].get_or_create_master_key() == raw_key
+    if source == "keychain":
+        assert not key_file.exists()
+    else:
+        assert key_file.read_text(encoding="ascii") == raw_key
+
+
+def test_clipboard_change_requires_post_consent_copy(setup_test_env):
+    from latticeshadow import config, consent
+
+    gate = setup_test_env["shadowd"]._new_consented_clipboard_change
+    pasteboard = MockPasteboard()
+    pasteboard.set_content("copied before enabling")
+    consent.set_consent("clipboard", True)
+    consent.set_consent("terminal_history", False)
+    enabled, epoch = consent.clipboard_state()
+    assert enabled
+    initial_count = pasteboard.changeCount()
+    # Existing clipboard content when capture starts is only a baseline.
+    assert gate(initial_count, enabled, epoch, None, False, None) == (
+        False, initial_count, True, epoch)
+    changed, count, was_enabled, last_epoch = gate(
+        pasteboard.changeCount(), enabled, epoch, initial_count, True, epoch)
+    assert not changed
+    pasteboard.set_content("copied after enabling")
+    assert gate(pasteboard.changeCount(), enabled, epoch, count, was_enabled, last_epoch) == (
+        True, 2, True, epoch)
+    # Pause, copy, and resume can all happen between daemon polls.
+    consent.set_paused(True)
+    pasteboard.set_content("copied while paused")
+    consent.set_paused(False)
+    enabled, resumed_epoch = consent.clipboard_state()
+    assert resumed_epoch != epoch
+    assert gate(pasteboard.changeCount(), enabled, resumed_epoch, 2, True, epoch) == (
+        False, 3, True, resumed_epoch)
+    pasteboard.set_content("copied after resuming")
+    assert gate(pasteboard.changeCount(), enabled, resumed_epoch, 3, True, resumed_epoch) == (
+        True, 4, True, resumed_epoch)
+    # Off, copy, and on between polls has the same safe re-baseline.
+    consent.set_consent("clipboard", False)
+    pasteboard.set_content("copied while off")
+    consent.set_consent("clipboard", True)
+    enabled, restored_epoch = consent.clipboard_state()
+    assert gate(pasteboard.changeCount(), enabled, restored_epoch, 4, True, resumed_epoch) == (
+        False, 5, True, restored_epoch)
+    # A lower-level config write also bumps the persisted epoch.
+    config.set("inputs.clipboard", "false")
+    pasteboard.set_content("copied during direct config off")
+    config.set("inputs.clipboard", "true")
+    enabled, direct_epoch = consent.clipboard_state()
+    assert direct_epoch != restored_epoch
+    assert gate(pasteboard.changeCount(), enabled, direct_epoch, 5, True, restored_epoch) == (
+        False, 6, True, direct_epoch)
+    # Failed pasteboard reads also require a fresh baseline.
+    assert gate(None, enabled, direct_epoch, 6, True, direct_epoch) == (
+        False, 6, False, direct_epoch)
+    assert gate(7, enabled, direct_epoch, 6, False, direct_epoch) == (
+        False, 7, True, direct_epoch)
+
+
+def test_clipboard_baseline_rejects_consent_change_during_sample(setup_test_env, monkeypatch):
+    daemon = setup_test_env["shadowd"]
+    pasteboard = MockPasteboard()
+    pasteboard.set_content("pre-consent copy")
+    states = iter(((False, 1), (True, 2)))
+    monkeypatch.setattr(daemon.consent, "clipboard_state", lambda: next(states))
+    assert daemon._clipboard_baseline(pasteboard) == (1, False, 2)
 
 def test_cli_remove(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
@@ -819,6 +1499,57 @@ def test_clipboard_capture_respects_disabled_input(setup_test_env, monkeypatch):
             t.join(timeout=1.0)
 
 
+def test_clipboard_copy_during_pause_at_read_is_not_stored(setup_test_env, monkeypatch):
+    from latticeshadow import consent
+
+    shadowd = setup_test_env["shadowd"]
+    cli = setup_test_env["shadow_cli"]
+    monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
+    choose_capture_sources(clipboard=True)
+    switched = threading.Event()
+
+    class SwitchingPasteboard(MockPasteboard):
+        switch_on_read = False
+
+        def stringForType_(self, pb_type):
+            if self.switch_on_read:
+                self.switch_on_read = False
+                consent.set_paused(True)
+                self.set_content("secret copied while paused")
+                consent.set_paused(False)
+                switched.set()
+            return super().stringForType_(pb_type)
+
+    pasteboard = SwitchingPasteboard()
+    with patch_general_pasteboard(pasteboard):
+        thread = threading.Thread(target=shadowd.run_daemon)
+        thread.start()
+        try:
+            time.sleep(0.2)
+            pasteboard.switch_on_read = True
+            pasteboard.set_content("ordinary first copy")
+            assert switched.wait(3)
+            time.sleep(0.2)
+            vault = cli.get_vault(create_if_missing=True)
+            assert vault.count() == 0
+
+            pasteboard.set_content("copy after resumed capture")
+            deadline = time.monotonic() + 3
+            count = 0
+            while time.monotonic() < deadline:
+                with sqlite3.connect(setup_test_env["db_path"]) as conn:
+                    count = conn.execute(
+                        "SELECT COUNT(*) FROM vectors WHERE collection = 'clipboard'"
+                    ).fetchone()[0]
+                if count:
+                    break
+                time.sleep(0.02)
+            assert count == 1
+        finally:
+            shadowd._running = False
+            thread.join(timeout=2)
+
+
 def test_clipboard_revocation_skips_changes_while_daemon_runs(setup_test_env, monkeypatch):
     from latticeshadow import config, consent
 
@@ -901,7 +1632,7 @@ def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup
     key = cli.get_or_create_master_key()
     main = open_main_vault(str(setup_test_env["db_path"]), key)
     hot = open_hot_vault(str(setup_test_env["db_path"]), key)
-    event = fetch_events(main, limit=1)[0]
+    event = fetch_events(main, limit=1)["events"][0]
     assert event["text"] == content
     assert search_events(main, content, limit=1)[0]["id"] == event["id"]
     assert hot.search(content, n_results=1).ids == [event["id"]]
@@ -918,6 +1649,6 @@ def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup
 
     reopened_main = open_main_vault(str(setup_test_env["db_path"]), key)
     reopened_hot = open_hot_vault(str(setup_test_env["db_path"]), key)
-    assert fetch_events(reopened_main, limit=10) == []
+    assert fetch_events(reopened_main, limit=10)["events"] == []
     assert reopened_main.count() == 0
     assert reopened_hot.count() == 0

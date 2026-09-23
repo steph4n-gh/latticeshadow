@@ -5,6 +5,11 @@ which command was used, where a source came from, and what to do next.
 The monorepo provides one development environment and test entry point;
 the following product work is still to do.
 
+The [daily-use alpha execution plan](ALPHA_PLAN.md) coordinates this backlog into
+one implementation campaign, with agent ownership, shared interfaces, acceptance
+gates, and macOS artifact validation. It is the next milestone's execution guide;
+the entries below retain the background and completed work.
+
 ## 1. Make recall meaningful
 
 - Wire one real local embedding model into the client and both vault openers.
@@ -38,8 +43,10 @@ covered a fresh clone, setup, manual recall, explicit capture choices, synthetic
 clipboard capture, deletion, and shutdown. An upgrade from the prior checkout
 preserved source flags, required missing consent choices, refreshed the local
 integrity baseline through reinstall, and kept enable/disable state across
-reboots. The CI base image has Gatekeeper disabled, so signing, notarization,
-native app packaging, and real desktop interaction remain to be validated.
+reboots. The CI base image has Gatekeeper disabled. The later
+[unsigned alpha candidate](validation/desktop-gui.md) passed a packaged desktop
+journey, while signing, notarization, stock Gatekeeper, and populated legacy
+upgrade remain open release checks.
 
 ## 3. Prove the core memory workflow
 

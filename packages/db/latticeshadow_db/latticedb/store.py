@@ -13,6 +13,7 @@ import sqlite3
 import json
 import hashlib
 import time
+import tempfile
 import torch
 import numpy as np
 from typing import Optional, List, Tuple, Dict, Any, Sequence
@@ -216,6 +217,7 @@ class VectorStore:
 
         self._init_db()
         self._load_from_db()
+        self._observed_revision = self._loaded_revision
 
     def _get_drosophila_hasher(self, dim: int):
         if not hasattr(self, "_drosophila_hasher") or self._drosophila_hasher is None:
@@ -258,6 +260,41 @@ class VectorStore:
                     f.close()
                 except Exception:
                     pass
+
+    def _vector_manifest_path(self) -> str:
+        return f"{self.db_path}_{self.collection}_vectors.meta.json"
+
+    def _vector_manifest(self) -> Optional[dict]:
+        try:
+            with open(self._vector_manifest_path(), "r", encoding="utf-8") as handle:
+                value = json.load(handle)
+            return value if isinstance(value, dict) else None
+        except (OSError, ValueError):
+            return None
+
+    def _invalidate_vector_manifest(self) -> None:
+        try:
+            os.unlink(self._vector_manifest_path())
+        except FileNotFoundError:
+            pass
+
+    def _write_vector_manifest(self, revision: int) -> None:
+        path = self._vector_manifest_path()
+        value = {"revision": revision, "count": len(self._doc_ids),
+                 "dimension": self._memmap_dim, "drosophila": self._store_drosophila}
+        fd, temporary = tempfile.mkstemp(
+            prefix=os.path.basename(path) + ".tmp-", dir=os.path.dirname(os.path.abspath(path))
+        )
+        os.fchmod(fd, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _ensure_memmap(self):
         """Sync memmap capacity with the physical file size on disk if modified externally."""
@@ -1431,6 +1468,7 @@ class VectorStore:
         """Write a PyTorch tensor to the memmap at a given row index, growing capacity if needed."""
         if idx < 0:
             raise IndexError("Index must be non-negative.")
+        self._invalidate_vector_manifest()
         dim = vec.view(-1).shape[0]
         if self._memmap is None:
             self._init_memmap(dim)
@@ -1505,10 +1543,54 @@ class VectorStore:
             conn.execute('CREATE INDEX IF NOT EXISTS idx_collection ON vectors(collection)')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_doc_id ON vectors(doc_id)')
             conn.execute('''
+                CREATE TABLE IF NOT EXISTS collection_revision (
+                    name TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS deleted_ids (
+                    collection TEXT NOT NULL, doc_id TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (collection, doc_id)
+                )
+            ''')
+            conn.execute('''
+                CREATE TRIGGER IF NOT EXISTS vectors_reject_deleted_id
+                BEFORE INSERT ON vectors
+                WHEN EXISTS (SELECT 1 FROM deleted_ids
+                             WHERE collection = NEW.collection AND doc_id = NEW.doc_id)
+                BEGIN SELECT RAISE(ABORT, 'document ID was deleted'); END
+            ''')
+            for name, operation, reference in (
+                ("insert", "INSERT", "NEW"),
+                ("update", "UPDATE OF document, vector_blob, metadata_json, created_at", "NEW"),
+                ("delete", "DELETE", "OLD"),
+            ):
+                conn.execute(f'''
+                    CREATE TRIGGER IF NOT EXISTS vectors_revision_{name}
+                    AFTER {operation} ON vectors
+                    BEGIN
+                        INSERT INTO collection_revision (name, revision)
+                        VALUES ({reference}.collection, 1)
+                        ON CONFLICT(name) DO UPDATE SET revision = revision + 1;
+                    END
+                ''')
+            conn.execute('''
+                CREATE TRIGGER IF NOT EXISTS vectors_remember_deleted_id
+                AFTER DELETE ON vectors
+                BEGIN
+                    INSERT OR IGNORE INTO deleted_ids (collection, doc_id)
+                    VALUES (OLD.collection, OLD.doc_id);
+                END
+            ''')
+            conn.execute('''
                 CREATE TABLE IF NOT EXISTS collection_meta (
                     name TEXT PRIMARY KEY,
                     embedding_dim INTEGER,
                     embedding_model TEXT,
+                    restored_from_model TEXT,
+                    derived_repair_needed INTEGER NOT NULL DEFAULT 0,
+                    derived_repair_error TEXT,
                     encrypted_key_blob TEXT,
                     vector_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1545,7 +1627,107 @@ class VectorStore:
                 conn.execute('ALTER TABLE collection_meta ADD COLUMN embedding_model TEXT')
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            try:
+                conn.execute('ALTER TABLE collection_meta ADD COLUMN restored_from_model TEXT')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute('ALTER TABLE collection_meta ADD COLUMN derived_repair_needed INTEGER NOT NULL DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute('ALTER TABLE collection_meta ADD COLUMN derived_repair_error TEXT')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
+
+    def revision(self) -> int:
+        """Current committed row revision for this collection."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT revision FROM collection_revision WHERE name = ?", (self.collection,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def repair_status(self) -> Dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT derived_repair_needed, derived_repair_error FROM collection_meta WHERE name = ?",
+                (self.collection,),
+            ).fetchone()
+        return {"needed": bool(row and row[0]), "error": row[1] if row else None}
+
+    def mark_repair_needed(self, error: str) -> None:
+        if not isinstance(error, str) or len(error) > 128:
+            raise ValueError("repair error must be a short class name")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO collection_meta (name, derived_repair_needed, derived_repair_error) "
+                "VALUES (?, 1, ?) ON CONFLICT(name) DO UPDATE SET "
+                "derived_repair_needed = 1, derived_repair_error = excluded.derived_repair_error",
+                (self.collection, error),
+            )
+
+    def get_records(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Read canonical rows by ID, preserving input order and omitting missing IDs."""
+        if len(ids) > 500:
+            raise ValueError("get_records accepts at most 500 IDs")
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT doc_id, document, metadata_json, collection, created_at, last_accessed "
+                f"FROM vectors WHERE collection = ? AND doc_id IN ({marks})",
+                [self.collection, *ids],
+            ).fetchall()
+        found = {row[0]: dict(zip(
+            ("doc_id", "document", "metadata_json", "collection", "created_at", "last_accessed"), row
+        )) for row in rows}
+        return [found[doc_id] for doc_id in ids if doc_id in found]
+
+    def scan_records(self, *, after_row_id: int = 0, limit: int = 500) -> tuple[List[Dict[str, Any]], int | None]:
+        """Page canonical rows in stable insertion order. Caller rechecks scope."""
+        if not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("scan_records limit must be between 1 and 500")
+        if not isinstance(after_row_id, int) or after_row_id < 0:
+            raise ValueError("after_row_id must be a nonnegative integer")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, doc_id, document, metadata_json, collection, created_at, last_accessed "
+                "FROM vectors WHERE collection = ? AND id > ? ORDER BY id LIMIT ?",
+                (self.collection, after_row_id, limit),
+            ).fetchall()
+        records = [dict(zip(
+            ("row_id", "doc_id", "document", "metadata_json", "collection", "created_at", "last_accessed"), row
+        )) for row in rows]
+        return records, (int(rows[-1][0]) if len(rows) == limit else None)
+
+    def list_deleted_ids(self, *, after_id: str = "", limit: int = 500) -> tuple[List[str], str | None]:
+        if not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("list_deleted_ids limit must be between 1 and 500")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT doc_id FROM deleted_ids WHERE collection = ? AND doc_id > ? "
+                "ORDER BY doc_id LIMIT ?", (self.collection, after_id, limit)
+            ).fetchall()
+        ids = [row[0] for row in rows]
+        return ids, (ids[-1] if len(ids) == limit else None)
+
+    def reject_deleted_ids(self, ids: List[str]) -> None:
+        """Fail before changing sidecars when a caller retries a forgotten ID."""
+        for start in range(0, len(ids), 500):
+            batch = ids[start:start + 500]
+            if not batch:
+                continue
+            marks = ",".join("?" for _ in batch)
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"SELECT doc_id FROM deleted_ids WHERE collection = ? AND doc_id IN ({marks}) LIMIT 1",
+                    [self.collection, *batch],
+                ).fetchone()
+            if row:
+                raise ValueError(f"Document ID {row[0]} was deleted; use a new ID for a new capture")
 
     def claim_embedding_model(self, model: str, dim: int) -> None:
         """Prevent a collection from mixing vectors from different models."""
@@ -1677,15 +1859,26 @@ class VectorStore:
 
     # ── Load ───────────────────────────────────────────────────────────────
 
-    def _load_from_db(self):
+    def _load_from_db(self, *, force_rebuild: bool = False):
         """Load all vectors for this collection into memory."""
         with self._connect() as conn:
+            conn.execute("BEGIN")
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT doc_id, vector_blob, entropy FROM vectors WHERE collection = ? ORDER BY id",
                 (self.collection,)
             )
             rows = cursor.fetchall()
+            revision_row = conn.execute(
+                "SELECT revision FROM collection_revision WHERE name = ?", (self.collection,)
+            ).fetchone()
+            snapshot_revision = int(revision_row[0]) if revision_row else 0
+            repair_row = conn.execute(
+                "SELECT derived_repair_needed FROM collection_meta WHERE name = ?", (self.collection,)
+            ).fetchone()
+            repair_needed = bool(repair_row and repair_row[0])
+        self._loaded_revision = snapshot_revision
+        force_rebuild = force_rebuild or repair_needed
 
         self._doc_ids = []
         self._entropies = []
@@ -1698,6 +1891,22 @@ class VectorStore:
                 self._doc_id_set.add(doc_id)
 
         N = len(self._doc_ids)
+        manifest = self._vector_manifest()
+        if N == 0:
+            if self._memmap is not None:
+                with self._lock_file(shared=False):
+                    self._memmap[:] = 0
+                    self._memmap.flush()
+                self._memmap = None
+            self._memmap_capacity = 0
+            self._memmap_dim = None
+            self._invalidate_vector_manifest()
+            filepath = f"{self.db_path}_{self.collection}_vectors.bin"
+            try:
+                os.unlink(filepath)
+            except FileNotFoundError:
+                pass
+            self._write_vector_manifest(snapshot_revision)
         if N > 0:
             first_vec = self._blob_to_vector(rows[0][1])
             dim = first_vec.view(-1).shape[0]
@@ -1709,6 +1918,10 @@ class VectorStore:
             bytes_per_elem = 1 if self._store_drosophila else 4
             dtype = 'uint8' if self._store_drosophila else 'float32'
             row_bytes = dim * bytes_per_elem
+            expected_manifest = {"revision": snapshot_revision, "count": N,
+                                 "dimension": dim, "drosophila": self._store_drosophila}
+            if manifest != expected_manifest:
+                force_rebuild = True
             
             need_recreate = True
             if os.path.exists(filepath):
@@ -1717,15 +1930,14 @@ class VectorStore:
                     if row_bytes > 0 and actual_size > 0 and actual_size % row_bytes == 0:
                         file_capacity = actual_size // row_bytes
                         if file_capacity >= N:
-                            self._memmap_dim = dim
-                            self._memmap_capacity = file_capacity
-                            self._memmap = np.memmap(
-                                filepath,
-                                dtype=dtype,
-                                mode='r+',
-                                shape=(file_capacity, dim),
-                            )
-                            need_recreate = False
+                            capacity = max(capacity, file_capacity)
+                            if not force_rebuild:
+                                self._memmap_dim = dim
+                                self._memmap_capacity = file_capacity
+                                self._memmap = np.memmap(
+                                    filepath, dtype=dtype, mode='r+', shape=(file_capacity, dim),
+                                )
+                                need_recreate = False
                         else:
                             logger.warning(
                                 "Memmap file has capacity %d for %d rows. Recreating and self-healing.",
@@ -1738,6 +1950,9 @@ class VectorStore:
                     logger.warning(f"Error opening memmap: {e}. Recreating.")
             
             if need_recreate:
+                if self._memmap is not None:
+                    self._memmap.flush()
+                    self._memmap = None
                 try:
                     if os.path.exists(filepath):
                         os.remove(filepath)
@@ -1747,6 +1962,7 @@ class VectorStore:
                 for idx, (doc_id, blob, entropy) in enumerate(rows):
                     vec = self._blob_to_vector(blob)
                     self._set_vector_at(idx, vec)
+                self._write_vector_manifest(snapshot_revision)
                     
             if self._diskann_rerank_enabled:
                 if not self._open_diskann_memmaps(dim):
@@ -1771,6 +1987,25 @@ class VectorStore:
 
         logger.debug("Loaded %d vectors for collection '%s' (FAISS: %s)",
                       len(self._doc_ids), self.collection, self._use_faiss)
+        if repair_needed:
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE collection_meta SET derived_repair_needed = 0, derived_repair_error = NULL "
+                    "WHERE name = ?", (self.collection,)
+                )
+
+    def _refresh_if_changed(self):
+        """Refresh process-local vector IDs and sidecars after another writer commits."""
+        current = self.revision()
+        if current == getattr(self, "_observed_revision", current):
+            return
+        self._faiss_index = None
+        self._use_faiss = False
+        self._invalidate_streaming_exact_norms(remove_sidecar=True)
+        if self._native_hnsw_enabled:
+            self._invalidate_hnswlib_index(remove_sidecar=True)
+        self._load_from_db(force_rebuild=True)
+        self._observed_revision = self._loaded_revision
 
 
     # ── Insert ─────────────────────────────────────────────────────────────
@@ -1778,6 +2013,9 @@ class VectorStore:
     def insert(self, doc_id: str, vector: torch.Tensor,
                document: str = "", metadata: Optional[Dict[str, Any]] = None):
         """Insert a single document vector."""
+        self._refresh_if_changed()
+        start_revision = self._observed_revision
+        self.reject_deleted_ids([doc_id])
         if torch.isnan(vector).any() or torch.isinf(vector).any():
             raise ValueError("Input vector contains NaN or Inf values.")
 
@@ -1854,6 +2092,8 @@ class VectorStore:
                 conn.commit()
         except sqlite3.IntegrityError:
             logger.debug("doc_id %s already exists in collection '%s'.", doc_id, self.collection)
+            self._load_from_db(force_rebuild=True)
+            self._observed_revision = self.revision()
             return
 
         if self.engine == "holographic":
@@ -1890,10 +2130,20 @@ class VectorStore:
         if self.max_entries > 0 and len(self._doc_ids) > self.max_entries:
             self._evict_oldest()
 
+        current_revision = self.revision()
+        if current_revision == start_revision + 1:
+            self._observed_revision = current_revision
+            self._write_vector_manifest(current_revision)
+        else:
+            self._refresh_if_changed()
+
     def insert_batch(self, doc_ids: List[str], vectors: List[torch.Tensor],
                      documents: Optional[List[str]] = None,
                      metadatas: Optional[List[Dict[str, Any]]] = None):
         """Insert multiple document vectors in a single transaction."""
+        self._refresh_if_changed()
+        start_revision = self._observed_revision
+        self.reject_deleted_ids(doc_ids)
         for vector in vectors:
             if torch.isnan(vector).any() or torch.isinf(vector).any():
                 raise ValueError("Input vector contains NaN or Inf values.")
@@ -1922,6 +2172,7 @@ class VectorStore:
                 existing_in_db = {r[0] for r in cursor.fetchall()}
 
         rows = []
+        inserted_count = 0
         wrote_vector_memmap = False
         prepared_indices = []
         prepared_vectors = []
@@ -1978,19 +2229,23 @@ class VectorStore:
 
             try:
                 with self._connect() as conn:
-                    conn.executemany(
-                        '''INSERT OR IGNORE INTO vectors
-                           (doc_id, text_hash, document, vector_blob, metadata_json, entropy, collection)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                        rows
-                    )
+                    inserted_rows = []
+                    for row in rows:
+                        inserted = conn.execute(
+                            '''INSERT OR IGNORE INTO vectors
+                               (doc_id, text_hash, document, vector_blob, metadata_json, entropy, collection)
+                               VALUES (?, ?, ?, ?, ?, ?, ?)''', row
+                        )
+                        if inserted.rowcount:
+                            inserted_rows.append(row)
+                    inserted_count = len(inserted_rows)
                     
                     # Compute sparse term frequency and document length for all inserted documents
                     sparse_rows = []
                     len_rows = []
                     import re
                     from collections import Counter
-                    for doc_id, _, document, _, _, _, _ in rows:
+                    for doc_id, _, document, _, _, _, _ in inserted_rows:
                         if document:
                             terms = re.findall(r'\b[a-zA-Z0-9]+\b', document.lower())
                             doc_len = len(terms)
@@ -2012,6 +2267,11 @@ class VectorStore:
                     conn.commit()
             except Exception as e:
                 logger.error("Batch insert failed: %s", e)
+                try:
+                    self._load_from_db(force_rebuild=True)
+                    self._observed_revision = self.revision()
+                except Exception:
+                    logger.exception("Could not rebuild sidecar after failed insert")
                 raise e
 
             if self.engine == "holographic":
@@ -2048,6 +2308,14 @@ class VectorStore:
         if self.max_entries > 0 and len(self._doc_ids) > self.max_entries:
             self._evict_oldest()
 
+        current_revision = self.revision()
+        if inserted_count == len(rows) and current_revision == start_revision + inserted_count:
+            self._observed_revision = current_revision
+            if rows:
+                self._write_vector_manifest(current_revision)
+        else:
+            self._refresh_if_changed()
+
 
     # ── Search ─────────────────────────────────────────────────────────────
 
@@ -2060,6 +2328,7 @@ class VectorStore:
         Search for nearest vectors by cosine similarity or Hamming distance.
         Optionally filter by metadata via `where` dict.
         """
+        self._refresh_if_changed()
         if n_results <= 0:
             raise ValueError("n_results must be strictly positive (greater than 0).")
         if torch.isnan(query_vector).any() or torch.isinf(query_vector).any():
@@ -3264,15 +3533,15 @@ class VectorStore:
             )
             conn.commit()
 
-        for doc_id in result.ids:
-            if doc_id in rows:
-                result.documents.append(rows[doc_id][0] or "")
-                try:
-                    result.metadatas.append(json.loads(rows[doc_id][1] or "{}"))
-                except json.JSONDecodeError:
-                    result.metadatas.append({})
-            else:
-                result.documents.append("")
+        valid = [(index, doc_id) for index, doc_id in enumerate(result.ids) if doc_id in rows]
+        result.ids = [doc_id for _, doc_id in valid]
+        result.scores = [result.scores[index] for index, _ in valid if index < len(result.scores)]
+        result.distances = [result.distances[index] for index, _ in valid if index < len(result.distances)]
+        for _, doc_id in valid:
+            result.documents.append(rows[doc_id][0] or "")
+            try:
+                result.metadatas.append(json.loads(rows[doc_id][1] or "{}"))
+            except json.JSONDecodeError:
                 result.metadatas.append({})
 
     def _filter_by_metadata(self, where: Dict[str, Any]) -> List[int]:
@@ -3299,6 +3568,8 @@ class VectorStore:
 
     def delete(self, doc_ids: List[str]) -> int:
         """Delete documents by ID. Returns count deleted."""
+        self._refresh_if_changed()
+        start_revision = self._observed_revision
         to_delete = set(doc_ids) & self._doc_id_set
         if not to_delete:
             return 0
@@ -3334,10 +3605,11 @@ class VectorStore:
         # Remove from SQLite
         with self._connect() as conn:
             placeholders = ",".join("?" * len(to_delete))
-            conn.execute(
+            deleted = conn.execute(
                 f"DELETE FROM vectors WHERE doc_id IN ({placeholders}) AND collection = ?",
                 list(to_delete) + [self.collection]
             )
+            deleted_count = deleted.rowcount
             conn.execute(
                 f"DELETE FROM sparse_index WHERE doc_id IN ({placeholders}) AND collection = ?",
                 list(to_delete) + [self.collection]
@@ -3407,6 +3679,13 @@ class VectorStore:
         if self._diskann_rerank_enabled:
             self._rebuild_diskann_sidecars()
         self._rebuild_faiss()
+
+        current_revision = self.revision()
+        if deleted_count == len(to_delete) and current_revision == start_revision + deleted_count:
+            self._observed_revision = current_revision
+            self._write_vector_manifest(current_revision)
+        else:
+            self._refresh_if_changed()
 
         return len(to_delete)
 
