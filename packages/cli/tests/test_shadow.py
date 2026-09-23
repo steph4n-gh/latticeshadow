@@ -920,6 +920,8 @@ def test_cli_shred(setup_test_env, capsys):
     run_cli(cli, ["shred"], mock_input="SHRED")
     out, err = capsys.readouterr()
     assert "SUCCESS" in out
+    assert "entire local memory vault" in out
+    assert "including notes, terminal records, and captured clipboard entries" in out
     
     # Connection should now fail
     with pytest.raises(SystemExit):
@@ -949,6 +951,23 @@ def test_shred_reports_locked_keychain_without_false_deletion_claim(
     assert "Vault crypto-shred completed" in out
     assert "Keychain entry could not be removed" in out
     assert "Keychain entry destroyed" not in out
+
+
+def test_doctor_does_not_recommend_shred_for_vault_open_error(
+        setup_test_env, monkeypatch, capsys):
+    cli = setup_test_env["shadow_cli"]
+    setup_test_env["db_path"].write_bytes(b"disposable vault fixture")
+
+    def unavailable_vault():
+        raise RuntimeError("simulated Keychain access failure")
+
+    monkeypatch.setattr(cli, "get_vault", unavailable_vault)
+    monkeypatch.setattr(cli.subprocess, "run", lambda *args, **kwargs: MagicMock(stdout="", stderr="", returncode=0))
+    cli.do_doctor()
+    out = capsys.readouterr().out
+    assert "Failed to open database" in out
+    assert "keep the vault and key intact" in out
+    assert "shadow shred" not in out
 
 
 def test_existing_wrapped_key_is_never_replaced_when_keychain_unavailable(setup_test_env, monkeypatch):

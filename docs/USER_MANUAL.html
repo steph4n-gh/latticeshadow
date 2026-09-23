@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- markdown-sha256: e2d0bdd51068a064921b1d0c61428dbef0ffe2708a975c41e13d21f605dfd817 -->
+<!-- markdown-sha256: 08375f86e910bd95bc4b705870341856744c997781a95fe3df45b32149fdd761 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -149,16 +149,17 @@
       vectors.</p>
       <p>The internal <code>.app</code> candidate is arm64 and ad-hoc
       signed for testing. It has passed selected disposable-guest
-      checks, but upgrade approval, stock Gatekeeper, signing, and
-      notarization are still open release gates. This manual does not
-      offer it as a public installer. Build details and exact evidence
-      are in <a href="../packages/cli/packaging/README.md">App
+      checks, but successful legacy upgrade, stock Gatekeeper, signing,
+      and notarization are still open release gates. This manual does
+      not offer it as a public installer. Build details and exact
+      evidence are in <a href="../packages/cli/packaging/README.md">App
       packaging</a>.</p>
       <p>If you have a working 0.1 vault, <strong>do not replace its app
       with this unsigned candidate</strong>. A wrapped key may require
-      Keychain approval after an app's signing identity changes, and the
-      0.1-to-0.2 upgrade path has not passed that check. Keep the
-      original app, vault, <code>.key</code> file, and Keychain item
+      Keychain approval after an app's signing identity changes. In the
+      unsigned lab, approval alone did not reopen a populated 0.1 vault;
+      a signed upgrade with a stable app identity remains untested. Keep
+      the original app, vault, <code>.key</code> file, and Keychain item
       intact. Deleting a key to clear an access prompt can make the
       vault unreadable.</p>
       <h2 id="2-first-session-save-and-find-one-note">2. First session:
@@ -360,9 +361,9 @@
       capture status, Pause/Resume, and a keyboard-shortcut choice. The
       shortcut defaults to Option–Space; Control–Option–Space,
       Command–Option–Space, and Off are available. If macOS does not
-      permit the shortcut, use the menu item. The alpha's full logged-in
-      UI and shortcut permission behavior are still under
-      validation.</p>
+      permit the shortcut, use the menu item. The packaged panel passed
+      a logged-in synthetic journey; cross-app shortcut and macOS
+      permission behavior remain unverified.</p>
       <p>With the Recall panel open:</p>
       <ol type="1">
       <li>Leave search empty for recent events, or type a query for
@@ -491,6 +492,19 @@
       shared machine. Configuring remote providers and experimental
       sync/listener switches deserves a separate review of their data
       boundary.</p>
+      <p><code>ask</code>, <code>recap</code>, and <code>context</code>
+      read saved memories across event types, including manual notes and
+      terminal records. They can send unscoped, unredacted excerpts to
+      the provider you chose; MCP grants and MCP pattern redaction do
+      not apply to these commands. With <code>memory.provider</code> set
+      to <code>none</code>, they do not contact an automatically
+      discovered LM Studio server. To use a local server, select its
+      provider explicitly, for example
+      <code>shadow config set memory.provider lmstudio</code>. The
+      experimental <code>sleep</code> enrichment path can also send
+      saved-entry excerpts when a provider is selected; its sensitivity
+      filter is heuristic, not a guarantee that every secret is
+      withheld.</p>
       <p>Live client data normally lives in
       <code>~/.latticeshadow</code>:</p>
       <table>
@@ -570,7 +584,8 @@
       </tr>
       <tr>
       <td><code>shadow shred</code></td>
-      <td>Destructive crypto-shred path for the local vault. It reports
+      <td>Crypto-shred the entire local memory vault, including notes,
+      terminal records, and captured clipboard entries. It reports
       Keychain entry removal separately; a locked Keychain can leave
       that entry behind. Read the command and keep a recoverable backup
       only if that is your intent.</td>
@@ -908,13 +923,14 @@
       </tr>
       <tr>
       <td><code>sleep</code></td>
-      <td>Experimental REM-style consolidation. May involve a configured
-      LLM.</td>
+      <td>Experimental REM-style consolidation; may send saved-entry
+      excerpts to a selected LLM provider. Its sensitivity filter is
+      heuristic.</td>
       </tr>
       <tr>
       <td><code>shred</code></td>
-      <td>Destructive local crypto-shred path; Keychain cleanup is
-      reported separately.</td>
+      <td>Destructive crypto-shred of the entire local memory vault;
+      Keychain cleanup is reported separately.</td>
       </tr>
       <tr>
       <td><code>calibrate</code></td>
@@ -951,7 +967,8 @@
       <tr>
       <td><code>ask QUESTION</code> / <code>recap</code> /
       <code>context</code></td>
-      <td>LLM-powered memory features; data may reach a configured
+      <td>LLM-powered memory features; unscoped, unredacted excerpts
+      from saved event types may reach a configured local or remote
       provider.</td>
       </tr>
       <tr>

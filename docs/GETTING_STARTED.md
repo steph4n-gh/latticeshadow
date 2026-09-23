@@ -127,8 +127,9 @@ search field is empty. Select a result to see its source, time, project, ID, and
 preview. You can copy, open a supported link or file, assign a project, or
 confirm Forget. The menu lets you choose Option-Space, Control-Option-Space,
 Command-Option-Space, or Off for the shortcut. Use **Open Recall…** in the menu
-if a shortcut is unavailable. Desktop behavior is still being checked in a
-logged-in test VM for this alpha.
+if a shortcut is unavailable. The packaged menu and Recall actions passed a
+[logged-in synthetic VM journey](validation/desktop-gui.md); cross-app shortcut
+behavior remains unproven through Screen Sharing.
 
 Stop the daemon with:
 

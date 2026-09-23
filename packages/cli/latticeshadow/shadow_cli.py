@@ -392,7 +392,7 @@ def do_shred():
     db_path = get_db_path()
     shred_hot = hot_collection_exists(db_path)
 
-    print("\033[91mWARNING: You are about to crypto-shred your entire clipboard history.\033[0m")
+    print("\033[91mWARNING: You are about to crypto-shred your entire local memory vault, including notes, terminal records, and captured clipboard entries.\033[0m")
     print("This action is IRREVERSIBLE. The encryption keys will be destroyed.")
     confirm = input("Type 'SHRED' to confirm: ")
     if confirm.strip() == "SHRED":
@@ -431,13 +431,16 @@ def do_sleep():
     vault.consolidate()
     count_after = vault.count()
     print(f"Consolidation complete: {count_before} → {count_after} entries.")
-    # Run LLM dream enrichment if configured
-    try:
-        from latticeshadow.dreamer import dream_cycle
-        dream_cycle(vault)
-        print("Dream enrichment complete.")
-    except Exception as e:
-        print(f"Dream enrichment skipped: {e}")
+    # Run LLM dream enrichment only when a provider was selected explicitly.
+    if config.get("memory.provider") in (None, "none"):
+        print("Dream enrichment skipped: no LLM provider selected.")
+    else:
+        try:
+            from latticeshadow.dreamer import dream_cycle
+            dream_cycle(vault)
+            print("Dream enrichment pass finished; check any warnings for skipped entries.")
+        except Exception as e:
+            print(f"Dream enrichment skipped: {e}")
 
 
 def do_watch():
@@ -1266,27 +1269,27 @@ def do_trust(args):
 # ── Memory Commands (LLM-powered) ────────────────────────────────────────────
 
 def do_ask(question):
-    """Ask a freeform question about your clipboard history."""
+    """Ask a freeform question about saved local memories."""
     from latticeshadow.llm import ShadowLLM, LLMError
 
     llm = ShadowLLM.from_config()
     if llm is None:
-        print("LLM not configured. Run: shadow config set memory.provider gemini")
+        print("LLM not configured. Choose a provider with 'shadow config set memory.provider PROVIDER'.")
         return
 
     vault = get_vault()
     if not vault or vault.count() == 0:
-        print("No clipboard history to search.")
+        print("No saved memories to search.")
         return
 
-    # Search for relevant clips using existing hybrid search
+    # Search saved memories using existing hybrid search.
     try:
         results = vault.search(question, n_results=10, hybrid=True)
         if not results or not results.documents:
-            print("No relevant clipboard history found.")
+            print("No relevant saved memories found.")
             return
     except Exception:
-        print("No relevant clipboard history found.")
+        print("No relevant saved memories found.")
         return
 
     # Build context from results
@@ -1303,10 +1306,10 @@ def do_ask(question):
         answer = llm.complete(
             system=(
                 "You are a helpful assistant. Answer the user's question using ONLY "
-                "the clipboard history context provided below. Be concise and specific. "
+                "the saved memory context provided below. Be concise and specific. "
                 "If the answer isn't in the context, say so."
             ),
-            user=f"Clipboard context:\n{context}\n\nQuestion: {question}",
+            user=f"Saved memory context:\n{context}\n\nQuestion: {question}",
         )
         print(answer)
     except LLMError as e:
@@ -1314,22 +1317,22 @@ def do_ask(question):
 
 
 def do_recap():
-    """Summarize today's clipboard activity."""
+    """Summarize today's saved local memories."""
     from latticeshadow.llm import ShadowLLM, LLMError
 
     llm = ShadowLLM.from_config()
     if llm is None:
-        print("LLM not configured. Run: shadow config set memory.provider gemini")
+        print("LLM not configured. Choose a provider with 'shadow config set memory.provider PROVIDER'.")
         return
 
     vault = get_vault()
     if not vault:
-        print("No clipboard history.")
+        print("No saved memories.")
         return
 
     today_clips = vault.get_today()
     if not today_clips:
-        print("No clipboard activity today.")
+        print("No saved memories today.")
         return
 
     # Format clips for the LLM
@@ -1342,13 +1345,12 @@ def do_recap():
     try:
         answer = llm.complete(
             system=(
-                "Summarize this person's day based on their clipboard activity. "
-                "Group by time blocks and topics. Use bullet points. Be concise. "
-                "Focus on what they were DOING, not what they copied."
+                "Summarize this person's day using only the saved memory entries below. "
+                "Group by time blocks and topics. Use bullet points. Be concise."
             ),
             user="\n\n".join(clip_lines),
         )
-        print(f"\n\033[96m── Today's Recap ({len(today_clips)} clips) ──\033[0m\n")
+        print(f"\n\033[96m── Today's Recap ({len(today_clips)} memories) ──\033[0m\n")
         print(answer)
     except LLMError as e:
         print(f"LLM error: {e}")
@@ -1360,17 +1362,17 @@ def do_context():
 
     llm = ShadowLLM.from_config()
     if llm is None:
-        print("LLM not configured. Run: shadow config set memory.provider gemini")
+        print("LLM not configured. Choose a provider with 'shadow config set memory.provider PROVIDER'.")
         return
 
     vault = get_vault()
     if not vault:
-        print("No clipboard history.")
+        print("No saved memories.")
         return
 
     recent = vault.get_recent(limit=20)
     if not recent:
-        print("No recent clipboard activity.")
+        print("No recent saved memories.")
         return
 
     clip_lines = []
@@ -1383,7 +1385,7 @@ def do_context():
     try:
         answer = llm.complete(
             system=(
-                "Based on these recent clipboard entries (most recent first), describe "
+                "Based on these recent saved memory entries (most recent first), describe "
                 "what the user is currently working on. Be specific about technologies, "
                 "files, and tasks. One paragraph, no bullet points."
             ),
@@ -2127,7 +2129,10 @@ def do_doctor():
             else:
                 checks.append((True, "Database", db_detail, None))
         except Exception as e:
-            checks.append((False, "Database", f"Failed to open database: {e}", "run 'shadow shred' to reset database"))
+            checks.append((
+                False, "Database", f"Failed to open database: {e}",
+                "stop other writers; keep the vault and key intact; check Keychain access, model identity, and a verified backup",
+            ))
     else:
         checks.append((False, "Database", "NOT found", "run 'shadow install' and copy some text to initialize"))
 
@@ -2309,7 +2314,7 @@ def main():
   native intents   Show native App Intents command contract
   bench moonshot  Run a moonshot retrieval smoke benchmark
   mcp serve       Serve redacted memory over MCP stdio
-  sleep           Trigger REM sleep consolidation
+  sleep           Consolidate memory; selected LLM provider may receive excerpts
   shred           Panic button: crypto-shred all history
   install         Prepare the background daemon without starting capture
   enable          Start the background daemon
@@ -2321,14 +2326,14 @@ def main():
   gui             Start native macOS Menu Bar GUI
   fix             Speculatively resolve clipboard error tracebacks from history
   --- Memory (LLM-powered) ---
-  ask    <question> Ask a question about your clipboard history
-  recap             Summarize today's clipboard activity
-  context           What are you working on right now?
+  ask    <question> Ask about saved memories; may send excerpts to your LLM provider
+  recap             Summarize today's saved memories; may send excerpts
+  context           Describe recent saved memories; may send excerpts
   config            View or modify LatticeShadow settings""",
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    sp = subparsers.add_parser("search", help="Search clipboard history")
+    sp = subparsers.add_parser("search", help="Search saved local memory")
     sp.add_argument("query", type=str, help="Semantic query")
 
     unsp = subparsers.add_parser("unswap", help="Restore the state of a backgrounded application using semantic context")
@@ -2489,8 +2494,8 @@ def main():
     grant_revoke.add_argument("grant_id", help="Grant ID")
     grant_revoke.add_argument("--vault-dir", help="Explicit alternate vault directory")
 
-    subparsers.add_parser("sleep", help="Trigger REM sleep consolidation")
-    subparsers.add_parser("shred", help="Crypto-shred clipboard history")
+    subparsers.add_parser("sleep", help="Consolidate memory; a selected LLM provider may receive excerpts")
+    subparsers.add_parser("shred", help="Crypto-shred the entire local memory vault")
     subparsers.add_parser("install", help="Prepare the daemon without enabling capture or shell hooks")
     rebuild_p = subparsers.add_parser("rebuild-index", help="Re-embed saved events with the pinned local model")
     rebuild_p.add_argument("--yes", action="store_true", help="Skip the REBUILD prompt")
@@ -2543,11 +2548,11 @@ def main():
     gpp.add_argument("query", type=str, help="Semantic query to search and paste")
 
     # Memory commands (LLM-powered)
-    ap = subparsers.add_parser("ask", help="Ask a question about clipboard history")
+    ap = subparsers.add_parser("ask", help="Ask about saved memories; may send unscoped excerpts to the configured LLM provider")
     ap.add_argument("question", type=str, help="Freeform question")
 
-    subparsers.add_parser("recap", help="Summarize today's clipboard activity")
-    subparsers.add_parser("context", help="What are you working on right now?")
+    subparsers.add_parser("recap", help="Summarize today's saved memories; may send unscoped excerpts to the configured LLM provider")
+    subparsers.add_parser("context", help="Describe recent saved memories; may send unscoped excerpts to the configured LLM provider")
 
     # Config commands
     cp = subparsers.add_parser("config", help="View or modify settings")

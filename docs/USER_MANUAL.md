@@ -64,14 +64,15 @@ cloud language-model provider by default. If the model is unavailable, the
 client reports an error instead of silently switching to hash vectors.
 
 The internal `.app` candidate is arm64 and ad-hoc signed for testing. It has
-passed selected disposable-guest checks, but upgrade approval, stock
+passed selected disposable-guest checks, but successful legacy upgrade, stock
 Gatekeeper, signing, and notarization are still open release gates. This manual
 does not offer it as a public installer. Build details and exact evidence are in
 [App packaging](../packages/cli/packaging/README.md).
 
 If you have a working 0.1 vault, **do not replace its app with this unsigned
 candidate**. A wrapped key may require Keychain approval after an app's signing
-identity changes, and the 0.1-to-0.2 upgrade path has not passed that check.
+identity changes. In the unsigned lab, approval alone did not reopen a
+populated 0.1 vault; a signed upgrade with a stable app identity remains untested.
 Keep the original app, vault, `.key` file, and Keychain item intact. Deleting a
 key to clear an access prompt can make the vault unreadable.
 
@@ -277,8 +278,8 @@ On a logged-in Mac, `shadow gui` starts the AppKit menu bar client. The menu has
 **Open Recall…**, capture status, Pause/Resume, and a keyboard-shortcut choice.
 The shortcut defaults to Option–Space; Control–Option–Space,
 Command–Option–Space, and Off are available. If macOS does not permit the
-shortcut, use the menu item. The alpha's full logged-in UI and shortcut
-permission behavior are still under validation.
+shortcut, use the menu item. The packaged panel passed a logged-in synthetic
+journey; cross-app shortcut and macOS permission behavior remain unverified.
 
 With the Recall panel open:
 
@@ -400,6 +401,16 @@ appear in shell history or process listings. Avoid entering a real credential
 that way on a shared machine. Configuring remote providers and experimental
 sync/listener switches deserves a separate review of their data boundary.
 
+`ask`, `recap`, and `context` read saved memories across event types, including
+manual notes and terminal records. They can send unscoped, unredacted excerpts
+to the provider you chose; MCP grants and MCP pattern redaction do not apply to
+these commands. With `memory.provider` set to `none`, they do not contact an
+automatically discovered LM Studio server. To use a local server, select its
+provider explicitly, for example `shadow config set memory.provider lmstudio`.
+The experimental `sleep` enrichment path can also send saved-entry excerpts
+when a provider is selected; its sensitivity filter is heuristic, not a
+guarantee that every secret is withheld.
+
 Live client data normally lives in `~/.latticeshadow`:
 
 | File or area | Purpose |
@@ -428,7 +439,7 @@ These actions have different effects:
 | `shadow disable` | Stop the launch agent and keep it off across logins; memories remain. |
 | `shadow forget --id ID` | Delete selected live events after confirmation; check any index-cleanup warning. |
 | `shadow remove` | Stop the agent, remove its plist and optional marked shell hook, then ask whether to delete `~/.latticeshadow`. Default **No** preserves data and key. |
-| `shadow shred` | Destructive crypto-shred path for the local vault. It reports Keychain entry removal separately; a locked Keychain can leave that entry behind. Read the command and keep a recoverable backup only if that is your intent. |
+| `shadow shred` | Crypto-shred the entire local memory vault, including notes, terminal records, and captured clipboard entries. It reports Keychain entry removal separately; a locked Keychain can leave that entry behind. Read the command and keep a recoverable backup only if that is your intent. |
 
 For source installation, `shadow remove` does not delete the Git checkout or
 `.venv`; remove those separately if you want the development files gone. Do not
@@ -514,15 +525,15 @@ first-run checklist.
 | `repair list/status` | Review or change status of human-approved repair proposals. |
 | `native intents` | Print the optional native companion's App Intents command contract. |
 | `bench moonshot` | Synthetic retrieval benchmark with selected engines; not a user-data performance guarantee. |
-| `sleep` | Experimental REM-style consolidation. May involve a configured LLM. |
-| `shred` | Destructive local crypto-shred path; Keychain cleanup is reported separately. |
+| `sleep` | Experimental REM-style consolidation; may send saved-entry excerpts to a selected LLM provider. Its sensitivity filter is heuristic. |
+| `shred` | Destructive crypto-shred of the entire local memory vault; Keychain cleanup is reported separately. |
 | `calibrate` | Experimental alignment/drift check (`--check`). |
 | `compile` / `recall QUERY` | Experimental holographic daily index and query; distinct from ordinary `timeline` recall. |
 | `unswap QUERY` | Experimental state restoration from remembered context. |
 | `compose` / `fix` / `evolve` | Experimental command suggestion, traceback repair, and review/apply of pending code mutations. Review any proposed command or diff yourself. |
 | `time-travel` | Experimental environment snapshots (`--list`) and rollback (`--rollback HASH`); potentially changes files. |
 | `get-ghost-paste` / `get-loop-fix` / `ghost-paste QUERY` | Experimental ambient/speculative helpers. |
-| `ask QUESTION` / `recap` / `context` | LLM-powered memory features; data may reach a configured provider. |
+| `ask QUESTION` / `recap` / `context` | LLM-powered memory features; unscoped, unredacted excerpts from saved event types may reach a configured local or remote provider. |
 | `pot generate/verify` | Experimental signed proof-file commands; not a zk-SNARK guarantee. |
 
 ### GUI action reference

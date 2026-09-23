@@ -119,23 +119,14 @@ class ShadowLLM:
         """
         Create an LLM client from config.toml + Keychain.
 
-        Returns None if provider is 'none' or not configured.
-        Auto-detects LM Studio at localhost:1234 as a fallback.
+        Returns None if provider is 'none' or not configured. A local provider
+        must be selected explicitly, just like a remote provider.
         """
         cfg = config.load_config()
         memory = cfg.get("memory", {})
         provider = memory.get("provider", "none")
 
         if provider == "none":
-            # Auto-detect LM Studio as fallback
-            lmstudio = cls(
-                endpoint="http://localhost:1234/v1",
-                model="default",
-                api_key=None,
-                timeout=10.0,
-            )
-            if lmstudio.is_reachable():
-                return lmstudio
             return None
 
         # Get endpoint URL

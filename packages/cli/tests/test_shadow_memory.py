@@ -224,15 +224,17 @@ class TestDreamer:
 
 class TestLLMClient:
     def test_from_config_returns_none_when_no_provider(self, tmp_path, monkeypatch):
-        """from_config returns None when provider is 'none' and no LM Studio."""
+        """Provider 'none' never probes or sends data to a local LLM service."""
         import latticeshadow.config as cfg
         from latticeshadow.llm import ShadowLLM
 
         monkeypatch.setattr(cfg, "CONFIG_PATH", str(tmp_path / "config.toml"))
         monkeypatch.setattr(cfg, "LOG_DIR", str(tmp_path))
 
-        # Mock is_reachable to return False (no LM Studio)
-        monkeypatch.setattr(ShadowLLM, "is_reachable", lambda self: False)
+        def unexpected_probe(self):
+            raise AssertionError("provider=none must not probe an LLM service")
+
+        monkeypatch.setattr(ShadowLLM, "is_reachable", unexpected_probe)
 
         result = ShadowLLM.from_config()
         assert result is None

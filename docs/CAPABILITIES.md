@@ -29,7 +29,8 @@ security audit. Start with the [user manual](USER_MANUAL.md) or the shorter
   default client path is `~/.latticeshadow/shadow.sqlite`; configuration, keys,
   and logs live nearby. The DB library uses the path you pass to `connect`.
 - The CLI's default memory provider is `none`, so ordinary remember/search does
-  not call a remote language model. Its retrieval model downloads from Hugging
+  not call a remote language model and optional LLM commands do not probe an
+  unselected local server. Its retrieval model downloads from Hugging
   Face on first use and then runs locally. If you configure a cloud LLM or
   another sync/listener feature, those choices have additional data boundaries.
 - The client encrypts stored document text in its privacy-enabled collection
@@ -45,7 +46,11 @@ security audit. Start with the [user manual](USER_MANUAL.md) or the shorter
   patterns before returning allowed event text. Pattern matching can miss
   secrets; a connected assistant can receive anything the server does not
   catch. The [sharing guide](MCP.md) explains scope and revocation. The CLI's
-  optional LLM commands may send processed context to a configured provider.
+  optional `ask`, `recap`, and `context` commands can send unscoped, unredacted
+  excerpts from any saved event type to a configured local or remote provider;
+  MCP grants and redaction do not apply to those commands. Experimental `sleep`
+  enrichment can also send saved-entry excerpts when a provider is selected;
+  its sensitivity filter is heuristic.
 - iCloud, peer mesh, mobile API, and ambient app context are disabled by
   default. They are experimental and should be reviewed separately before
   enabling them. Do not expose a peer listener to an untrusted network.
