@@ -5,7 +5,10 @@ import base64
 import hashlib
 import heapq
 import json
+import os
+import threading
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Iterable, Iterator
 
@@ -15,6 +18,8 @@ MAX_TEXT_BYTES = 1024 * 1024
 MAX_METADATA_BYTES = 64 * 1024
 MAX_LABEL_BYTES = 256
 MAX_IDS = 1000
+_SEARCH_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
+_SEARCH_LOCK = threading.RLock()
 
 
 def _utc(value: Any, *, legacy: bool = False) -> str:
@@ -196,24 +201,68 @@ def search_events(vault: Any, query: str, *, scope: dict[str, Any] | None = None
     if not isinstance(limit, int) or not 1 <= limit <= 100:
         raise ValueError("search limit must be between 1 and 100")
     selected = _scope(scope)
-    candidate_ids = [event["id"] for event in iter_events(vault, scope=selected)] if scope is not None else None
-    if candidate_ids == []:
+    if selected["projects"] == () or selected["sources"] == ():
         return []
-    if candidate_ids is None:
+    if not hasattr(vault, "revision"):
+        # Compatibility for callers with an older, noncanonical test vault.
         result = vault.search(query, n_results=limit, hybrid=True)
+        ranked = list(zip(result.ids, result.scores))
     else:
-        result = vault.search(query, n_results=limit, hybrid=True, candidate_ids=candidate_ids)
-    ids = list(getattr(result, "ids", []) or [])
-    scores = list(getattr(result, "scores", []) or [])
+        with _SEARCH_LOCK:
+            cache = _retrieval_cache(vault)
+            candidate_ids = [doc_id for doc_id, fields in cache["scope_fields"].items()
+                             if _matches(fields, selected)]
+            ranked = cache["index"].rank(query, candidate_ids, limit=limit)
+    ids = [doc_id for doc_id, _ in ranked]
     hydrated = {event["id"]: event for event in get_events(vault, ids, scope=selected)}
     events = []
-    for idx, doc_id in enumerate(ids):
+    for doc_id, score in ranked:
         if doc_id in hydrated:
             event = hydrated[doc_id]
-            if idx < len(scores):
-                event["score"] = float(scores[idx])
+            event["score"] = float(score)
             events.append(event)
     return events
+
+
+def _retrieval_cache(vault: Any) -> dict[str, Any]:
+    """Reuse an ephemeral index across vault objects for the same SQLite file."""
+    from latticeshadow.retrieval import RetrievalIndex
+
+    db_path = os.path.realpath(vault.db_path)
+    stat = os.stat(db_path)
+    key = (db_path, stat.st_dev, stat.st_ino, vault.name)
+    cache = _SEARCH_CACHE.get(key)
+    if cache is None:
+        cache = {"index": RetrievalIndex(), "scope_fields": {}, "revision": None}
+        _SEARCH_CACHE[key] = cache
+    _SEARCH_CACHE.move_to_end(key)
+    while len(_SEARCH_CACHE) > 2:
+        _, old = _SEARCH_CACHE.popitem(last=False)
+        old["index"].clear()
+    if cache["revision"] == vault.revision():
+        return cache
+    for _ in range(3):
+        before = vault.revision()
+        events = list(iter_events(vault))
+        if vault.revision() != before:
+            continue
+        cache["index"].refresh(events, before)
+        cache["scope_fields"] = {
+            event["id"]: {"project": event["project"], "source": event["source"],
+                          "timestamp": event["timestamp"]}
+            for event in events
+        }
+        cache["revision"] = before
+        return cache
+    raise RuntimeError("Vault changed repeatedly during retrieval refresh; retry the search")
+
+
+def clear_search_cache() -> None:
+    """Drop cached plaintext and vectors after local sharing policy changes."""
+    with _SEARCH_LOCK:
+        for cache in _SEARCH_CACHE.values():
+            cache["index"].clear()
+        _SEARCH_CACHE.clear()
 
 
 def add_event(vault: Any, event_type: str, text: str, *, source: str | None = None,
