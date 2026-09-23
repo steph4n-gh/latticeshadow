@@ -300,6 +300,10 @@ instead of acting on a stale row. Pause/Resume here changes the same persistent
 capture state as the CLI. The GUI is a view of your local vault, not a separate
 copy of it.
 
+The focused-row Return binding was corrected in source after the tested
+unsigned app ZIP. In that earlier ZIP, use **Copy**; the source fix has passed
+focused AppKit tests and awaits a packaged retest.
+
 The exact current labels are collected in the [GUI action reference](#gui-action-reference).
 
 ## 6. Back up and restore

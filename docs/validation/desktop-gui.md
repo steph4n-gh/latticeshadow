@@ -33,6 +33,12 @@ quarantine attribute. Although Gatekeeper assessments were enabled there, this
 does not validate the normal quarantined-download or notarization path. Daemon
 capture was not enabled. The guest was stopped after the checks.
 
+After this ZIP check, source commit `bc5c2c3` routed Return and keypad Enter on
+a focused result table row through the existing live-event Copy action. All 23
+focused native-AppKit tests passed. This source fix has **not** yet been
+retested in an installed app; the observation above remains the exact result
+for the `20669ff` ZIP.
+
 ## Preceding packaged app in a disposable Mac VM
 
 The unsigned Apple Silicon app in `LatticeShadow-b603442-arm64.zip` was
