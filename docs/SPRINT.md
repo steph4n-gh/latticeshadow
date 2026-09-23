@@ -33,8 +33,13 @@ reported, clean exits no longer trigger restart loops, and removal preserves key
 when data is kept. These are not a complete installer redesign.
 
 Current installer keeps shell setup opt-in, and the optional plugin leaves existing
-key bindings and completion widgets untouched. A live fresh-install and upgrade
-exercise is still needed.
+key bindings and completion widgets untouched. A disposable macOS Tahoe VM has
+covered a fresh clone, setup, manual recall, explicit capture choices, synthetic
+clipboard capture, deletion, and shutdown. An upgrade from the prior checkout
+preserved source flags, required missing consent choices, refreshed the local
+integrity baseline through reinstall, and kept enable/disable state across
+reboots. The CI base image has Gatekeeper disabled, so signing, notarization,
+native app packaging, and real desktop interaction remain to be validated.
 
 ## 3. Prove the core memory workflow
 
