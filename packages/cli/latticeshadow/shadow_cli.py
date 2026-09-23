@@ -523,6 +523,13 @@ def do_install():
         plistlib.dump(plist, f)
     print(f"✓ Installed launchd plist at {PLIST_PATH}")
 
+    # A checkout update changes the daemon's source hashes. The explicit
+    # install step accepts the currently installed code as the new baseline.
+    from latticeshadow.integrity import compute_manifest, write_manifest
+
+    write_manifest(compute_manifest())
+    print("✓ Refreshed local daemon integrity baseline.")
+
     # Migrate old automatic hooks, preserving an explicit shell opt-in.
     zshrc = os.path.expanduser("~/.zshrc")
     opted_in = False
@@ -542,12 +549,19 @@ def do_install():
 
 def do_enable():
     from latticeshadow import consent
+    from latticeshadow.integrity import verify_integrity
 
     pending = consent.pending_capture_sources()
     if pending:
         raise SystemExit(
             f"Choose capture sources before starting: {', '.join(pending)}. "
             "Run 'shadow consent wizard' or 'shadow consent set <source> on|off' for each."
+        )
+    passed, violations = verify_integrity()
+    if not passed:
+        raise SystemExit(
+            f"Daemon source changed ({len(violations)} file(s)). "
+            "Review the update, then run 'shadow install' to refresh the local integrity baseline."
         )
     if os.environ.get("LATTICESHADOW_EMBEDDING_MODEL") != "hash":
         from latticeshadow.vaults import _local_model

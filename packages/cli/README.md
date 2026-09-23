@@ -57,6 +57,8 @@ shadow disable
 
 `shadow install` prepares the launch agent without starting capture, including
 at the next login. Re-running it stops a running daemon until `shadow enable`.
+After updating the checkout, re-run `shadow install` so the daemon's local
+source-change baseline matches the installed code.
 The wizard shows each optional data source and network surface. Clipboard and
 terminal capture default to off; both need an explicit on/off choice before
 `shadow enable`. That command loads the model and starts

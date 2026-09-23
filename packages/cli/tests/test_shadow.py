@@ -297,6 +297,25 @@ def test_cli_install_idempotency(setup_test_env, mock_subprocess_run, capsys):
     assert first_plist == setup_test_env["plist_path"].read_bytes()
     assert not setup_test_env["zshrc_path"].exists()
 
+
+def test_install_refreshes_integrity_baseline_after_upgrade(setup_test_env, mock_subprocess_run):
+    from latticeshadow import integrity
+
+    cli = setup_test_env["shadow_cli"]
+    cli.do_install()
+    assert integrity.verify_integrity() == (True, [])
+
+    stale = integrity.read_manifest()
+    stale["shadowd.py"] = "0" * 64
+    integrity.write_manifest(stale)
+    choose_capture_sources(clipboard=True)
+    with pytest.raises(SystemExit, match="Daemon source changed"):
+        cli.do_enable()
+
+    cli.do_install()
+    assert integrity.verify_integrity() == (True, [])
+
+
 def test_cli_enable_disable(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     choose_capture_sources(clipboard=True)

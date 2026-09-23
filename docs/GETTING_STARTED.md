@@ -89,7 +89,9 @@ concealed content but is not a reliable secret detector.
 On upgrade, existing source settings stay as configured, but an old setting
 without a recorded choice must be confirmed before capture restarts. Check
 `shadow consent status` and use the wizard or `shadow consent set` for each
-pending source. Manual saves and searches do not require capture consent.
+pending source. After updating the checkout, run `shadow install` again to
+refresh the local daemon code baseline, then `shadow enable`. Reinstalling
+stops the old daemon. Manual saves and searches do not require capture consent.
 
 Stop capture with:
 
@@ -156,6 +158,7 @@ client configuration that we have not verified end to end.
 | First save or `shadow enable` cannot load the model | Check network access for the first Hugging Face download. Retry after connectivity returns. Avoid switching to hash embeddings in an existing collection. |
 | `shadow status` says `STOPPED` | This is normal for manual use. To start capture, review sources above, then run `shadow install` and `shadow enable`. |
 | `shadow enable` asks for capture choices | Run `shadow consent wizard`, or set both `clipboard` and `terminal_history` explicitly with `shadow consent set <source> on\|off`, then retry. |
+| `shadow enable` says the daemon source changed | Review the checkout update, run `shadow install` to refresh the local code baseline, then retry `shadow enable`. |
 | Search says “No matching memories found” | The store is empty or the query found no match. Check `shadow timeline` for saved events. |
 | Search says “Search failed” | Search encountered an error. Read the error, then run `shadow doctor`; inspect the local daemon log if capture is involved. |
 | Old data reports an embedding-model mismatch | Stop capture with `shadow disable`, then run `shadow rebuild-index --yes`. It re-embeds saved events and creates a private database backup. Stop other writers during the rebuild. |
