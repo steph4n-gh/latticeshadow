@@ -67,6 +67,8 @@ def classify(path: str) -> Checks:
     if path.startswith("packages/cli/latticeshadow/"):
         if path.rsplit("/", 1)[-1] in {"vaults.py", "timeline.py", "retrieval.py", "rebuild.py"}:
             return MODEL
+        if path.rsplit("/", 1)[-1] in {"menu.py", "shadowd.py", "security.py"}:
+            return BUNDLE
         return MAC
     if path in {"packages/cli/pyproject.toml", "requirements-dev.txt", "Makefile"}:
         return ALL

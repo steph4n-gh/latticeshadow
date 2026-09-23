@@ -23,6 +23,8 @@ class PathSelectionTests(unittest.TestCase):
     def test_native_and_recipe_changes(self):
         self.assertEqual(select(["packages/cli/native/Package.swift"]), SWIFT)
         self.assertEqual(select(["packages/cli/packaging/setup_app.py"]), BUNDLE)
+        self.assertEqual(select(["packages/cli/latticeshadow/menu.py"]), BUNDLE)
+        self.assertEqual(select(["packages/cli/latticeshadow/shadowd.py"]), BUNDLE)
 
     def test_mixed_changes_union(self):
         self.assertEqual(select(["packages/cli/native/Package.swift", "packages/cli/latticeshadow/vaults.py"]),
