@@ -954,6 +954,39 @@ def test_existing_vault_without_key_refuses_new_key(setup_test_env, monkeypatch)
         cli.get_or_create_master_key()
     assert not setup_test_env["key_file"].exists()
 
+
+def test_daemon_refuses_to_replace_inaccessible_existing_key(setup_test_env, monkeypatch):
+    from latticeshadow import security
+
+    daemon = setup_test_env["shadowd"]
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text("existing-wrapped-key", encoding="ascii")
+    setup_test_env["db_path"].write_bytes(b"existing vault fixture")
+    original = key_file.read_bytes()
+
+    def keychain_locked(*_args):
+        raise PermissionError("Keychain locked")
+
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave", keychain_locked)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave",
+                        lambda *_args: pytest.fail("daemon must not generate a replacement key"))
+    with pytest.raises(PermissionError, match="Existing master key could not be unlocked"):
+        daemon.get_or_create_master_key()
+    assert key_file.read_bytes() == original
+    assert setup_test_env["db_path"].read_bytes() == b"existing vault fixture"
+
+
+def test_daemon_can_still_create_key_for_empty_profile(setup_test_env, monkeypatch):
+    from latticeshadow import security
+
+    daemon = setup_test_env["shadowd"]
+    setup_test_env["log_dir"].mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave", lambda *_args: b"wrapped")
+    key = daemon.get_or_create_master_key()
+    assert len(key) == 64
+    assert setup_test_env["key_file"].read_text() == "d3JhcHBlZA=="
+
 def test_cli_remove(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
     

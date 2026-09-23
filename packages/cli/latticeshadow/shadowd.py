@@ -98,9 +98,10 @@ def _notify(title: str, message: str):
 def get_or_create_master_key() -> str:
     """
     Resolve the master key using a 3-tier waterfall:
-    1. macOS Keychain (preferred, hardware-backed on Apple Silicon via Secure Enclave)
+    1. macOS Keychain (hardware-backed when Secure Enclave key creation succeeds)
     2. Flat file at ~/.latticeshadow/.key (backward compatibility)
-    3. Generate new key → store in both Keychain and flat file (Enclave-wrapped)
+    3. Generate new key → store in both Keychain and flat file (keypair-wrapped
+       when available; the keypair may be software-backed)
     """
     import base64
     import hashlib
@@ -120,6 +121,8 @@ def get_or_create_master_key() -> str:
             return None
 
     # 1. Try Keychain first
+    stored = None
+    keychain_lookup_failed = False
     try:
         stored = keychain.retrieve_key()
         if stored:
@@ -135,10 +138,10 @@ def get_or_create_master_key() -> str:
                     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                     with os.fdopen(fd, "w") as f:
                         f.write(wrapped)
-                    logger.info("Migrated legacy master key to Secure Enclave wrapped key.")
+                    logger.info("Migrated legacy master key to a Keychain keypair-wrapped key.")
                     return stored
     except Exception:
-        pass
+        keychain_lookup_failed = True
 
     # 2. Fall back to flat file
     key_file = get_key_file()
@@ -162,17 +165,27 @@ def get_or_create_master_key() -> str:
                 fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 with os.fdopen(fd, "w") as f:
                     f.write(wrapped)
-                logger.info("Migrated flat-file legacy master key to Secure Enclave wrapped key.")
+                logger.info("Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 return stored
+        raise PermissionError(
+            "Existing master key could not be unlocked. The key file was left unchanged; "
+            "retry from an unlocked macOS login session."
+        )
+
+    if os.path.exists(get_db_path()) or stored or keychain_lookup_failed:
+        raise PermissionError(
+            "Existing vault or Keychain key cannot be unlocked. No new key was created; "
+            "check Keychain access from an unlocked macOS login session."
+        )
 
     # 3. Generate new key
     raw_key = hashlib.sha256(os.urandom(64)).hexdigest()
     try:
         wrapped_key = wrap_and_encode(raw_key)
-        enclave_wrapped = True
+        keypair_wrapped = True
     except Exception:
         wrapped_key = raw_key
-        enclave_wrapped = False
+        keypair_wrapped = False
         
     try:
         keychain.store_key(wrapped_key)
@@ -183,7 +196,7 @@ def get_or_create_master_key() -> str:
     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(wrapped_key)
-    logger.info("Generated master key at %s (Secure Enclave wrapped: %s)", key_file, enclave_wrapped)
+    logger.info("Generated master key at %s (Keychain keypair wrapped: %s)", key_file, keypair_wrapped)
     return raw_key
 
 
