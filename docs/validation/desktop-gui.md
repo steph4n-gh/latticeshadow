@@ -1,5 +1,30 @@
 # Desktop recall GUI validation
 
+## Styled panel on a logged-in local macOS session
+
+The integrated styled AppKit panel was exercised from source containing
+`d1c3e3b`, with a disposable encrypted vault holding two synthetic events and
+the hash embedding model. This was a source-run GUI check, not an installed-app
+or launchd test. The harness redirected configuration and clipboard writes to
+isolated test storage. It supplied **Capture stopped** as the daemon status;
+therefore that status text is visual evidence only, not proof of daemon state.
+
+| Journey | Observed result |
+| --- | --- |
+| Search and filters | Searching `queue` returned both events. Project `Nimbus` narrowed to the note; source `file` plus that project returned **No matches** and cleared the preview. Removing the source filter restored the note. |
+| Preview and copy | Selecting the note displayed its text, source, project, times, and event reference. **Copy** and Return after focusing the selected row wrote exactly its text to the isolated pasteboard. |
+| Open | The note showed **No supported target**, explaining that it had no web link or local file. **Open link/file** was invoked for a synthetic local file, but this run did not obtain a visible success signal from the opened app. |
+| Assign project | Assigning the note to `Field Guide` removed it from the `Nimbus` filter and updated the result row and preview when the filter was cleared. |
+| Forget | **Forget…** opened a confirmation explaining that backups and the original source might retain the event. The confirmation was canceled in this local run; the earlier installed-app run above covers confirmed deletion. |
+| Pause and keyboard | **Pause capture** changed to **Resume capture** and back using isolated configuration. Escape hid the panel, and Option-Space sent through the bound accessory app reopened it. This does not establish that the shortcut works with another app in the foreground. |
+
+The dark panel rendered in the logged-in session with readable search, results,
+preview, provenance, and action controls. An inline panel image was inspected,
+but no sanitized image file was retained for documentation. A packaged-app
+check of this styled revision and cross-app shortcut behavior remain open.
+
+## Earlier installed-app validation
+
 Tested the installed, unsigned 0.2.0 Apple Silicon app built from `0af8643` in
 an isolated macOS VM through Screen Sharing. The artifact SHA-256 was
 `94e2daf036f54a650cd6a357688b04f9fb723cf2b8f05c56f9bae3a9b05b2ad8`.
