@@ -47,7 +47,7 @@ the macOS client is not installed on Linux.
 | Assistant access | Local project/source grants restrict a read-only stdio MCP server. An independent MCP SDK test and a synthetic Codex CLI host walkthrough pass. See the [sharing guide](docs/MCP.md). |
 | Database | `latticeshadow-db` installs independently and supports document/vector storage, metadata, retrieval, and optional research indexes. |
 | Desktop and peer features | The menu-bar recall panel is implemented; logged-in guest interaction is still pending. Cross-device sync, autonomous repair, and several retrieval modes remain experimental. |
-| Distribution | Source releases are public. An unsigned standalone Apple Silicon app candidate has been built and tested in a stripped disposable guest; the integrated candidate, signing, and notarization are still pending. |
+| Distribution | Source releases are public. An unsigned integrated Apple Silicon app passed offline save/search and daemon checks in a stripped disposable guest. Upgrade approval, GUI, stock Gatekeeper, signing, and notarization evidence remain open. |
 
 See [Capabilities and limits](docs/CAPABILITIES.md) for the evidence and privacy
 boundaries behind this table. The commands above require no LLM account.

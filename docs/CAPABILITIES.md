@@ -20,7 +20,7 @@ security audit. Start with the [manual walkthrough](GETTING_STARTED.md).
 | DB library | `latticeshadow-db` works without the macOS client and provides SQLite document storage, retrieval, metadata filters, and delete operations. | Without a caller-provided embedding function it uses hash vectors, which are not semantic. Experimental indexes need workload-specific testing. |
 | MCP | Explicit local grants restrict read-only recall, recent context, extractive summaries, and live citation resolution. An independent SDK test and a synthetic Codex CLI host walkthrough passed. | Grant policy and pattern redaction do not stop a separate local process from reading files or guarantee that every secret is removed. |
 | Menu bar and native companion | A recall panel with scope filters, preview, copy/open, project assignment, and confirmed forget is implemented. | Focused tests pass; logged-in guest interaction and shortcut/TCC behavior are still being checked. |
-| Releases | Tags publish source archives. An unsigned Apple Silicon app candidate was built and launched in a stripped disposable guest. | The integrated candidate still needs offline workflow, upgrade, UI, and signing/notarization evidence before a public binary release. |
+| Releases | Tags publish source archives. An unsigned integrated Apple Silicon app passed offline save/search and daemon lifecycle checks in a stripped disposable guest. | Upgrade Keychain approval, UI interaction, stock Gatekeeper, and signing/notarization remain to be validated before a public binary release. |
 
 ## Where does the information go?
 
