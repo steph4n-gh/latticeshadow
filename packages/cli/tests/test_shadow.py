@@ -57,6 +57,24 @@ def patch_general_pasteboard(mock_pb):
     finally:
         AppKit.NSPasteboard = orig_NSPasteboard
 
+
+def wait_for_daemon_polling(shadowd, monkeypatch):
+    """Signal once startup has baselined the clipboard before the poll loop."""
+    ready = threading.Event()
+    original_baseline = shadowd._clipboard_baseline
+    baseline_calls = 0
+
+    def signal_after_startup_baseline(pasteboard):
+        nonlocal baseline_calls
+        baseline = original_baseline(pasteboard)
+        baseline_calls += 1
+        if baseline_calls == 2:
+            ready.set()
+        return baseline
+
+    monkeypatch.setattr(shadowd, "_clipboard_baseline", signal_after_startup_baseline)
+    return ready
+
 @pytest.fixture(autouse=True)
 def setup_test_env(tmp_path, monkeypatch):
     """
@@ -1433,40 +1451,53 @@ def test_shred_active_daemon_exit(setup_test_env, monkeypatch):
 
 def test_deduplication(setup_test_env, monkeypatch):
     shadowd = setup_test_env["shadowd"]
-    cli = setup_test_env["shadow_cli"]
     choose_capture_sources(clipboard=True)
     
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
-    
-    mock_pb = MockPasteboard()
+    daemon_ready = wait_for_daemon_polling(shadowd, monkeypatch)
+
+    class ObservedPasteboard(MockPasteboard):
+        def __init__(self):
+            super().__init__()
+            self.read_change_counts = []
+
+        def stringForType_(self, pb_type):
+            self.read_change_counts.append(self.changeCount())
+            return super().stringForType_(pb_type)
+
+    mock_pb = ObservedPasteboard()
+
+    def stored_count():
+        with sqlite3.connect(setup_test_env["db_path"]) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM vectors WHERE collection = 'clipboard'"
+            ).fetchone()[0]
+
     with patch_general_pasteboard(mock_pb):
         t = threading.Thread(target=shadowd.run_daemon)
         t.start()
         
         try:
+            assert daemon_ready.wait(10)
             mock_pb.set_content("check duplicate entry")
-            time.sleep(0.2)
-            
+            deadline = time.monotonic() + 10
+            while stored_count() != 1 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert stored_count() == 1
+
             mock_pb.set_content("check duplicate entry")
-            time.sleep(0.2)
-            
+            duplicate_count = mock_pb.changeCount()
+            deadline = time.monotonic() + 10
+            while duplicate_count not in mock_pb.read_change_counts and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert duplicate_count in mock_pb.read_change_counts
+            assert stored_count() == 1
+
             mock_pb.set_content("different content")
-            time.sleep(0.2)
-            
-            master_key = cli.get_or_create_master_key()
-            
-            vault = cli.open_main_vault(
-                db_path=setup_test_env["db_path"],
-                master_key=master_key
-            )
-            
-            # Wait up to 3 seconds for the daemon thread to commit both records
-            for _ in range(30):
-                if vault.count() == 2:
-                    break
-                time.sleep(0.1)
-                
-            assert vault.count() == 2
+            deadline = time.monotonic() + 10
+            while stored_count() != 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert stored_count() == 2
         finally:
             shadowd._running = False
             t.join(timeout=1.0)
@@ -1507,20 +1538,7 @@ def test_clipboard_copy_during_pause_at_read_is_not_stored(setup_test_env, monke
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     choose_capture_sources(clipboard=True)
     switched = threading.Event()
-    daemon_ready = threading.Event()
-    original_baseline = shadowd._clipboard_baseline
-    baseline_calls = 0
-
-    def signal_after_startup_baseline(pasteboard):
-        nonlocal baseline_calls
-        baseline = original_baseline(pasteboard)
-        baseline_calls += 1
-        # The second baseline is taken just before the main polling loop.
-        if baseline_calls == 2:
-            daemon_ready.set()
-        return baseline
-
-    monkeypatch.setattr(shadowd, "_clipboard_baseline", signal_after_startup_baseline)
+    daemon_ready = wait_for_daemon_polling(shadowd, monkeypatch)
 
     class SwitchingPasteboard(MockPasteboard):
         switch_on_read = False
@@ -1571,13 +1589,14 @@ def test_clipboard_revocation_skips_changes_while_daemon_runs(setup_test_env, mo
     cli = setup_test_env["shadow_cli"]
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     choose_capture_sources(clipboard=True)
+    daemon_ready = wait_for_daemon_polling(shadowd, monkeypatch)
     mock_pb = MockPasteboard()
 
     with patch_general_pasteboard(mock_pb):
         thread = threading.Thread(target=shadowd.run_daemon)
         thread.start()
         try:
-            time.sleep(0.2)
+            assert daemon_ready.wait(10)
             mock_pb.set_content("first captured clipboard entry")
             deadline = time.monotonic() + 4
             count = 0
@@ -1616,6 +1635,7 @@ def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup
     choose_capture_sources(clipboard=True)
     shadowd.config.set("memory.hot_index_enabled", "true")
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
+    daemon_ready = wait_for_daemon_polling(shadowd, monkeypatch)
     content = "Deploy the invoice service with rsync"
     mock_pb = MockPasteboard()
 
@@ -1624,7 +1644,7 @@ def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup
         thread = threading.Thread(target=shadowd.run_daemon)
         thread.start()
         try:
-            time.sleep(0.2)
+            assert daemon_ready.wait(10)
             assert thread.is_alive()
             mock_pb.set_content(content)
             deadline = time.monotonic() + 4
