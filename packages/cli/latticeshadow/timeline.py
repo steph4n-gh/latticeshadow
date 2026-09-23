@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import heapq
 import json
 import uuid
 from datetime import datetime, timezone
@@ -74,7 +75,7 @@ def _metadata(raw: str | bytes | None) -> dict[str, Any]:
     return value
 
 
-def _event(vault: Any, record: dict[str, Any]) -> dict[str, Any]:
+def _event(vault: Any, record: dict[str, Any], *, decrypt: bool = True) -> dict[str, Any]:
     meta = _metadata(record["metadata_json"])
     doc_id = str(record["doc_id"])
     event_type = str(meta.get("event_type") or meta.get("source") or "").lower()
@@ -91,8 +92,8 @@ def _event(vault: Any, record: dict[str, Any]) -> dict[str, Any]:
     project = meta.get("project")
     if project is not None and not isinstance(project, str):
         raise ValueError(f"Stored event {doc_id} has invalid project metadata")
-    document = record["document"] or ""
-    if document.startswith("enc:"):
+    document = (record["document"] or "") if decrypt else ""
+    if decrypt and document.startswith("enc:"):
         privacy = getattr(vault, "_privacy", None)
         if privacy is None:
             raise ValueError(f"Encrypted event {doc_id} cannot be decrypted")
@@ -125,9 +126,8 @@ def iter_events(vault: Any, *, scope: dict[str, Any] | None = None) -> Iterator[
     while True:
         records, following = vault.scan_records(after_row_id=cursor, limit=500)
         for record in records:
-            event = _event(vault, record)
-            if _matches(event, selected):
-                yield event
+            if _matches(_event(vault, record, decrypt=False), selected):
+                yield _event(vault, record)
         if following is None:
             return
         cursor = following
@@ -162,13 +162,15 @@ def fetch_events(vault: Any, *, scope: dict[str, Any] | None = None,
     selected = _scope(scope)
     digest = _scope_digest(selected)
     marker = _read_cursor(cursor, digest) if cursor is not None else None
-    events = sorted(iter_events(vault, scope=selected),
-                    key=lambda event: (event["timestamp"], event["id"]), reverse=True)
+    candidates = iter_events(vault, scope=selected)
     if marker:
-        events = [event for event in events if (event["timestamp"], event["id"]) < marker]
-    page = events[:limit]
+        candidates = (event for event in candidates
+                      if (event["timestamp"], event["id"]) < marker)
+    found = heapq.nlargest(limit + 1, candidates,
+                           key=lambda event: (event["timestamp"], event["id"]))
+    page = found[:limit]
     next_cursor = (_make_cursor(page[-1]["timestamp"], page[-1]["id"], digest)
-                   if len(events) > limit else None)
+                   if len(found) > limit else None)
     return {"events": page, "next_cursor": next_cursor}
 
 
@@ -183,7 +185,8 @@ def get_events(vault: Any, ids: Iterable[str], *,
     records = []
     for start in range(0, len(chosen), 500):
         records.extend(vault.get_records(chosen[start:start + 500]))
-    return [event for record in records if _matches((event := _event(vault, record)), selected)]
+    return [_event(vault, record) for record in records
+            if _matches(_event(vault, record, decrypt=False), selected)]
 
 
 def search_events(vault: Any, query: str, *, scope: dict[str, Any] | None = None,
@@ -287,6 +290,48 @@ def forget_events(vault: Any, ids: Iterable[str]) -> dict[str, Any]:
         errors.append("Canonical records remain after deletion")
     return {"canonical_deleted": len(before - remaining),
             "derived_invalidated": not errors, "cleanup_errors": errors}
+
+
+def expire_events(vault: Any, *, before: datetime | str,
+                  scope: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Apply age retention to occurrence time through the normal forget path."""
+    boundary = _utc(before)
+    result = {"canonical_deleted": 0, "derived_invalidated": True, "cleanup_errors": []}
+    batch: list[str] = []
+    for event in iter_events(vault, scope=scope):
+        if event["timestamp"] >= boundary:
+            continue
+        batch.append(event["id"])
+        if len(batch) == 500:
+            part = forget_events(vault, batch)
+            result["canonical_deleted"] += part["canonical_deleted"]
+            result["derived_invalidated"] &= part["derived_invalidated"]
+            result["cleanup_errors"].extend(part["cleanup_errors"])
+            batch.clear()
+    if batch:
+        part = forget_events(vault, batch)
+        result["canonical_deleted"] += part["canonical_deleted"]
+        result["derived_invalidated"] &= part["derived_invalidated"]
+        result["cleanup_errors"].extend(part["cleanup_errors"])
+    return result
+
+
+def should_capture(text: str, source: str, *, excluded_sources: Iterable[str] = (),
+                   excluded_literals: Iterable[str] = ()) -> bool:
+    """Return whether a source/text passes bounded literal capture exclusions."""
+    _label(source, "source")
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    sources = tuple(excluded_sources)
+    literals = tuple(excluded_literals)
+    if len(sources) > 100 or len(literals) > 100:
+        raise ValueError("capture exclusions allow at most 100 entries per list")
+    for item in sources:
+        _label(item, "excluded source")
+    for item in literals:
+        _label(item, "excluded literal")
+    lowered = text.casefold()
+    return source not in sources and not any(item.casefold() in lowered for item in literals)
 
 
 def open_target(event: dict[str, Any]) -> str | None:

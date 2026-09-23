@@ -1907,6 +1907,7 @@ class VectorStore:
                document: str = "", metadata: Optional[Dict[str, Any]] = None):
         """Insert a single document vector."""
         self._refresh_if_changed()
+        start_revision = self._observed_revision
         self.reject_deleted_ids([doc_id])
         if torch.isnan(vector).any() or torch.isinf(vector).any():
             raise ValueError("Input vector contains NaN or Inf values.")
@@ -2022,11 +2023,18 @@ class VectorStore:
         if self.max_entries > 0 and len(self._doc_ids) > self.max_entries:
             self._evict_oldest()
 
+        current_revision = self.revision()
+        if current_revision == start_revision + 1:
+            self._observed_revision = current_revision
+        else:
+            self._refresh_if_changed()
+
     def insert_batch(self, doc_ids: List[str], vectors: List[torch.Tensor],
                      documents: Optional[List[str]] = None,
                      metadatas: Optional[List[Dict[str, Any]]] = None):
         """Insert multiple document vectors in a single transaction."""
         self._refresh_if_changed()
+        start_revision = self._observed_revision
         self.reject_deleted_ids(doc_ids)
         for vector in vectors:
             if torch.isnan(vector).any() or torch.isinf(vector).any():
@@ -2056,6 +2064,7 @@ class VectorStore:
                 existing_in_db = {r[0] for r in cursor.fetchall()}
 
         rows = []
+        inserted_count = 0
         wrote_vector_memmap = False
         prepared_indices = []
         prepared_vectors = []
@@ -2112,12 +2121,13 @@ class VectorStore:
 
             try:
                 with self._connect() as conn:
-                    conn.executemany(
+                    inserted = conn.executemany(
                         '''INSERT OR IGNORE INTO vectors
                            (doc_id, text_hash, document, vector_blob, metadata_json, entropy, collection)
                            VALUES (?, ?, ?, ?, ?, ?, ?)''',
                         rows
                     )
+                    inserted_count = inserted.rowcount
                     
                     # Compute sparse term frequency and document length for all inserted documents
                     sparse_rows = []
@@ -2186,6 +2196,12 @@ class VectorStore:
         # Eviction
         if self.max_entries > 0 and len(self._doc_ids) > self.max_entries:
             self._evict_oldest()
+
+        current_revision = self.revision()
+        if inserted_count == len(rows) and current_revision == start_revision + inserted_count:
+            self._observed_revision = current_revision
+        else:
+            self._refresh_if_changed()
 
 
     # ── Search ─────────────────────────────────────────────────────────────

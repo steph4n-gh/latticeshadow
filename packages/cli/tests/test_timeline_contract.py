@@ -1,11 +1,16 @@
 """Canonical event contract on an isolated hash-model vault."""
 import sqlite3
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from latticeshadow.timeline import (
-    add_event, assign_project, fetch_events, forget_events, get_events, search_events,
+    add_event, assign_project, expire_events, fetch_events, forget_events,
+    get_events, search_events, should_capture,
 )
 from latticeshadow.vaults import open_main_vault
 
@@ -68,6 +73,8 @@ def test_legacy_time_and_strict_decryption(vaults):
     assert event["timestamp"].endswith("Z")
     with sqlite3.connect(path) as conn:
         conn.execute("UPDATE vectors SET document = ? WHERE doc_id = ?", ("enc:v2:not-base64", "cmd_legacy"))
+    add_event(vault, "note", "safe event", source="manual")
+    assert len(fetch_events(vault, scope={"sources": ["manual"]})["events"]) == 1
     with pytest.raises(ValueError, match="decrypt"):
         get_events(vault, ["cmd_legacy"])
 
@@ -81,3 +88,45 @@ def test_input_bounds_and_empty_scope(vaults):
     with pytest.raises(ValueError, match="metadata"):
         add_event(vault, "note", "text", metadata={"oversized": "x" * (64 * 1024)})
     assert fetch_events(vault, scope={"projects": []}) == {"events": [], "next_cursor": None}
+
+
+def test_reader_open_before_separate_writer_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("LATTICESHADOW_EMBEDDING_MODEL", "hash")
+    path = str(tmp_path / "cross-process.sqlite")
+    reader = open_main_vault(path, "disposable-key")
+    root = Path(__file__).resolve().parents[3]
+    environment = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        [str(root / "packages/db"), str(root / "packages/cli")]))
+    writer = """
+import sys
+from latticeshadow.vaults import open_main_vault
+from latticeshadow.timeline import add_event, forget_events
+vault = open_main_vault(sys.argv[1], 'disposable-key')
+if sys.argv[2] == 'add':
+    print(add_event(vault, 'note', 'separate process memory', source='manual'))
+else:
+    forget_events(vault, [sys.argv[3]])
+"""
+    added = subprocess.run([sys.executable, "-c", writer, path, "add"],
+                           env=environment, capture_output=True, text=True, check=True)
+    doc_id = added.stdout.strip().splitlines()[-1]
+    assert search_events(reader, "separate process memory", scope={"sources": ["manual"]})[0]["id"] == doc_id
+    subprocess.run([sys.executable, "-c", writer, path, "delete", doc_id],
+                   env=environment, capture_output=True, text=True, check=True)
+    assert search_events(reader, "separate process memory", scope={"sources": ["manual"]}) == []
+
+
+def test_retention_uses_occurrence_time_and_literal_exclusions(vaults):
+    vault, _ = vaults
+    old = add_event(vault, "note", "old memory", source="manual",
+                    timestamp="2026-01-01T00:00:00Z")
+    new = add_event(vault, "note", "new memory", source="manual",
+                    timestamp="2026-09-01T00:00:00Z")
+    assert should_capture("A secret TOKEN appears", "manual",
+                          excluded_literals=["token"]) is False
+    assert should_capture("plain", "clipboard", excluded_sources=["clipboard"]) is False
+    assert should_capture("plain", "manual", excluded_literals=["token"]) is True
+    result = expire_events(vault, before="2026-06-01T00:00:00Z")
+    assert result["canonical_deleted"] == 1
+    assert get_events(vault, [old]) == []
+    assert get_events(vault, [new])[0]["id"] == new
