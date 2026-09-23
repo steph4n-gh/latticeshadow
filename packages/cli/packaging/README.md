@@ -66,3 +66,39 @@ on that pre-integration app exposed a model-path bug; the memory-core fix needs
 a rebuilt integrated artifact. Headless `screencapture` could not capture a
 display. Full offline save/search, a visible UI journey, upgrade/removal, stock
 Gatekeeper and final signed-artifact checks remain pending.
+
+## Integrated 0.2.0 candidate lab result
+
+The app built from source commit `0af86431d4f6d5b83d5b799e858cee11853bef97`
+passed `verify_app.py`: arm64 launcher, offline bundled-model encode and native
+resource smoke check, code-signature check, and 307 Mach-O library-link checks.
+The ZIP is 425,566,350 bytes with SHA-256
+`94e2daf036f54a650cd6a357688b04f9fb723cf2b8f05c56f9bae3a9b05b2ad8`.
+It is an ad-hoc signed internal test artifact, not a public release binary.
+
+In a disposable macOS 26.6.2 guest cloned from a CI base, Homebrew and Xcode
+Command Line Tools were removed before installing that exact ZIP under
+`/Applications`. With an empty application profile, the app's offline bundle
+check passed. `shadow remember note` saved a synthetic event while network
+model access was disabled; an offline project-scoped `shadow timeline --query`
+returned its exact ID and text, and the same query in an unrelated project
+returned no events. No capture source was enabled by installation.
+
+`shadow install` left the service stopped and wrote a launchd command of
+`Contents/MacOS/LatticeShadow --daemon`. After explicit off choices for
+clipboard and terminal history, `shadow enable` reported running with no
+capture sources; `launchctl list` showed a live PID and exit status 0.
+`shadow disable` stopped it. `shadow remove` with the default No answer removed
+the launchd plist but preserved the vault key and configuration byte-for-byte,
+and the saved event remained searchable afterward.
+
+A separate guest with version 0.1.0 installed first preserved the key and
+configuration byte-for-byte when its app bundle was replaced with 0.2.0. The
+first attempt to use that old wrapped key then waited inside macOS Keychain
+private-key decryption, consistent with an access-approval prompt after the
+ad-hoc app signature changed. The logged-in UI approval and a post-approval
+read remain to be checked. The stripped CI-base guest also cannot prove an
+out-of-box minimal macOS install or stock Gatekeeper behavior. The build guest
+had no Developer ID Application signing identity, and no notarization credential
+environment variables were present. Signed/notarized first-launch validation
+remains pending.
