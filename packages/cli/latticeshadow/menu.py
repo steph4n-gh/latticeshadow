@@ -1,559 +1,603 @@
-"""
-Native macOS Menu Bar GUI & Spotlight UI for LatticeShadow.
+"""AppKit menu and recall panel for the local LatticeShadow vault."""
 
-Uses Python-Cocoa AppKit bindings to create a status item with a dropdown menu
-and a modern, interactive Spotlight-style floating panel with live search results.
-"""
+from __future__ import annotations
 
-import os
-import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit
+
 import AppKit
 import objc
-import subprocess
-import threading
 from PyObjCTools import AppHelper
 
-from latticeshadow.shadow_cli import get_vault, LOG_DIR
+from latticeshadow import config, consent
+from latticeshadow.capture_state import get_status
+from latticeshadow.desktop_recall import DesktopRecall
+from latticeshadow.shadow_cli import get_vault
+from latticeshadow.timeline import assign_project, forget_events, get_events, open_target
 
-# Compatibility constants for different PyObjC versions
-NSEventMaskKeyDown = getattr(AppKit, "NSEventMaskKeyDown", getattr(AppKit, "NSKeyDownMask", 1024))
-NSEventModifierFlagOption = getattr(AppKit, "NSEventModifierFlagOption", getattr(AppKit, "NSAlternateKeyMask", 524288))
 
-# Dynamically load Metal and MetalKit frameworks
-HAS_METAL = False
-metal_device = None
+SHORTCUTS = ("off", "option-space", "control-option-space", "command-option-space")
+SHORTCUT_LABELS = ("Off", "Option–Space", "Control–Option–Space", "Command–Option–Space")
+MODIFIER_FLAGS = (
+    getattr(AppKit, "NSEventModifierFlagOption", 1 << 19),
+    getattr(AppKit, "NSEventModifierFlagControl", 1 << 18),
+    getattr(AppKit, "NSEventModifierFlagCommand", 1 << 20),
+    getattr(AppKit, "NSEventModifierFlagShift", 1 << 17),
+)
+KEY_MASK = getattr(AppKit, "NSEventMaskKeyDown", 1 << 10)
 
-try:
-    metal_bundle = objc.loadBundle(
-        'Metal',
-        globals(),
-        bundle_path='/System/Library/Frameworks/Metal.framework'
-    )
-    metalkit_bundle = objc.loadBundle(
-        'MetalKit',
-        globals(),
-        bundle_path='/System/Library/Frameworks/MetalKit.framework'
-    )
-    objc.loadBundleFunctions(
-        metal_bundle,
-        globals(),
-        [('MTLCreateSystemDefaultDevice', b'@')]
-    )
-    if 'MTLCreateSystemDefaultDevice' in globals():
-        metal_device = MTLCreateSystemDefaultDevice()
-        if metal_device is not None:
-            HAS_METAL = True
-except Exception as e:
-    print(f"Warning: Metal/MetalKit not fully supported or loaded: {e}", file=sys.stderr)
 
-if HAS_METAL:
+def _desktop_vault():
+    """The CLI's fatal exits become visible panel errors."""
     try:
-        MTKViewBase = objc.lookUpClass('MTKView')
-    except Exception:
-        MTKViewBase = AppKit.NSView
-        HAS_METAL = False
-else:
-    MTKViewBase = AppKit.NSView
+        return get_vault()
+    except SystemExit as exc:
+        detail = exc.code if isinstance(exc.code, str) else "Vault unavailable. Run shadow install."
+        raise RuntimeError(detail) from exc
 
 
-class GridMetalView(MTKViewBase):
-    def initWithFrame_(self, frame):
-        self = objc.super(GridMetalView, self).initWithFrame_(frame)
-        if self is not None:
-            self._fallback = False
-            if HAS_METAL:
-                self.initMetal()
-        return self
-
-    def initMetal(self):
-        try:
-            self.setDevice_(metal_device)
-            self.setOpaque_(False)
-            self.setClearColor_((0.0, 0.0, 0.0, 0.0))
-            
-            # Load and compile shaders
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            shader_path = os.path.join(current_dir, "Shaders.metal")
-            with open(shader_path, "r", encoding="utf-8") as f:
-                source_code = f.read()
-            
-            # Compile library
-            self.library = metal_device.newLibraryWithSource_options_error_(source_code, None, None)
-            if self.library is None:
-                raise RuntimeError("Failed to compile Metal library from source.")
-            
-            # Load functions
-            self.vertex_func = self.library.newFunctionWithName_("vertex_main")
-            self.fragment_func = self.library.newFunctionWithName_("fragment_main")
-            
-            # Create Render Pipeline Descriptor
-            MTLRenderPipelineDescriptor = objc.lookUpClass('MTLRenderPipelineDescriptor')
-            pipeline_desc = MTLRenderPipelineDescriptor.alloc().init()
-            pipeline_desc.setVertexFunction_(self.vertex_func)
-            pipeline_desc.setFragmentFunction_(self.fragment_func)
-            pipeline_desc.colorAttachments().objectAtIndexedSubscript_(0).setPixelFormat_(self.colorPixelFormat())
-            
-            # Set up alpha blending on color attachments
-            attachment = pipeline_desc.colorAttachments().objectAtIndexedSubscript_(0)
-            attachment.setBlendingEnabled_(True)
-            attachment.setSourceRGBBlendFactor_(4) # MTLBlendFactorSourceAlpha
-            attachment.setDestinationRGBBlendFactor_(5) # MTLBlendFactorOneMinusSourceAlpha
-            attachment.setRgbBlendOperation_(0) # MTLBlendOperationAdd
-            attachment.setSourceAlphaBlendFactor_(4)
-            attachment.setDestinationAlphaBlendFactor_(5)
-            attachment.setAlphaBlendOperation_(0)
-            
-            # Build render pipeline state
-            self.pipeline_state = metal_device.newRenderPipelineStateWithDescriptor_error_(pipeline_desc, None)
-            
-            # Command queue
-            self.command_queue = metal_device.newCommandQueue()
-            
-            # Time tracking
-            import time
-            self.start_time = time.time()
-            
-            # Set up draw notification/callback
-            self.setPaused_(False)
-            self.setEnableSetNeedsDisplay_(False) # Draw continuously
-            
-        except Exception as e:
-            print(f"Warning: GridMetalView failed to initialize Metal: {e}", file=sys.stderr)
-            self._fallback = True
-
-    def drawRect_(self, rect):
-        if self._fallback or not HAS_METAL:
-            return
-            
-        try:
-            import time
-            current_time = float(time.time() - self.start_time)
-            
-            # Create command buffer
-            command_buffer = self.command_queue.commandBuffer()
-            if command_buffer is None:
-                return
-            
-            # Get render pass descriptor from MTKView
-            render_pass_desc = self.currentRenderPassDescriptor()
-            if render_pass_desc is None:
-                return
-                
-            # Create command encoder
-            encoder = command_buffer.renderCommandEncoderWithDescriptor_(render_pass_desc)
-            if encoder is None:
-                return
-            
-            # Set pipeline state
-            encoder.setRenderPipelineState_(self.pipeline_state)
-            
-            # Send time float variable to fragment shader via setFragmentBytes_length_atIndex_
-            import struct
-            import ctypes
-            time_bytes = struct.pack('f', current_time)
-            buf = ctypes.create_string_buffer(time_bytes)
-            encoder.setFragmentBytes_length_atIndex_(ctypes.addressof(buf), len(time_bytes), 0)
-            
-            # Draw screen-aligned quad (4 vertices for triangle strip)
-            encoder.drawPrimitives_vertexStart_vertexCount_(5, 0, 4)
-            
-            # End encoding
-            encoder.endEncoding()
-            
-            # Present and commit
-            drawable = self.currentDrawable()
-            if drawable is not None:
-                command_buffer.presentDrawable_(drawable)
-            command_buffer.commit()
-            
-        except Exception as e:
-            print(f"Warning: Error in GridMetalView drawRect_: {e}", file=sys.stderr)
-            self._fallback = True
+def _shortcut_matches(mode, event):
+    if mode == "off" or event.keyCode() != 49:
+        return False
+    option, control, command, shift = MODIFIER_FLAGS
+    wanted = {"option-space": option, "control-option-space": control | option,
+              "command-option-space": command | option}.get(mode)
+    return wanted is not None and event.modifierFlags() & (option | control | command | shift) == wanted
 
 
-class SearchResultsDataSource(AppKit.NSObject):
+def _scope(project: str, unassigned: bool, source: str, period: int, now=None):
+    """Build one exact scope for recent results, search and selected-ID actions."""
+    result = {}
+    if unassigned:
+        result["projects"] = (None,)
+    elif project.strip():
+        result["projects"] = (project.strip(),)
+    if source.strip():
+        result["sources"] = (source.strip(),)
+    if period:
+        now = now or datetime.now().astimezone()
+        if period == 1:
+            since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            since = now - timedelta(days={2: 7, 3: 30}[period])
+        result["since"] = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return result
+
+
+def _row_label(event):
+    date = str(event.get("timestamp", ""))[:16].replace("T", " ")
+    source = str(event.get("source") or "unknown")
+    project = str(event.get("project") or "Unassigned")
+    snippet = " ".join(str(event.get("text") or "").split())[:110]
+    return f"{date}  ·  {source}  ·  {project}  ·  {snippet}"
+
+
+def _preview(event):
+    text = str(event.get("text") or "")
+    if len(text) > 20_000:
+        text = text[:20_000] + "\n… [preview shortened; Copy uses the complete event]"
+    target = open_target(event)
+    location = f"Target: {target}\n" if _open_kind(target) else ""
+    return (f"{text}\n\n"
+            f"Source: {event.get('source') or 'unknown'}\n"
+            f"Project: {event.get('project') or 'Unassigned'}\n"
+            f"Occurred: {event.get('timestamp') or 'unknown'}\n"
+            f"Captured: {event.get('captured_at') or 'unknown'}\n"
+            f"{location}"
+            f"Reference: latticeshadow://event/{quote(str(event.get('id') or ''), safe='')}")
+
+
+def _open_kind(target):
+    """Return a web URL or local file path; never produce an executable command."""
+    if not isinstance(target, str) or not target or any(ord(ch) < 32 for ch in target):
+        return None
+    try:
+        parsed = urlsplit(target)
+    except ValueError:
+        return None
+    if parsed.scheme in ("https", "http") and parsed.netloc:
+        return "web", target
+    if parsed.scheme == "file" and parsed.netloc in ("", "localhost"):
+        return "file", unquote(parsed.path)
+    if not parsed.scheme and Path(target).is_absolute():
+        return "file", target
+    return None
+
+
+def _label(text, frame):
+    field = AppKit.NSTextField.alloc().initWithFrame_(frame)
+    field.setStringValue_(text)
+    field.setEditable_(False)
+    field.setSelectable_(False)
+    field.setBezeled_(False)
+    field.setDrawsBackground_(False)
+    return field
+
+
+def _button(title, action, target, frame):
+    button = AppKit.NSButton.alloc().initWithFrame_(frame)
+    button.setTitle_(title)
+    button.setTarget_(target)
+    button.setAction_(action)
+    return button
+
+
+class ResultsDataSource(AppKit.NSObject):
     def init(self):
-        self = objc.super(SearchResultsDataSource, self).init()
-        self.results = []  # List of tuples: (doc_string, score)
+        self = objc.super(ResultsDataSource, self).init()
+        if self is not None:
+            self.events = []
         return self
 
-    def numberOfRowsInTableView_(self, tableView):
-        return len(self.results)
+    def numberOfRowsInTableView_(self, table):
+        return len(self.events)
 
-    def tableView_objectValueForTableColumn_row_(self, tableView, column, row):
-        if row < len(self.results):
-            doc, score = self.results[row]
-            # Clean up newlines for a clean single-line table view representation
-            preview = doc.strip().replace("\n", " ")
-            if len(preview) > 75:
-                preview = preview[:75] + "..."
-            return f"[{score:.2f}] {preview}"
-        return ""
+    def tableView_objectValueForTableColumn_row_(self, table, column, row):
+        return _row_label(self.events[row]) if 0 <= row < len(self.events) else ""
 
 
-class SpotlightTextField(AppKit.NSTextField):
-    def performKeyEquivalent_(self, event):
-        if event.keyCode() == 53:  # ESC
-            self.window().orderOut_(None)
-            return True
-        return objc.super(SpotlightTextField, self).performKeyEquivalent_(event)
-
-
-class SpotlightWindow(AppKit.NSPanel):
+class RecallPanel(AppKit.NSPanel):
     def canBecomeKeyWindow(self):
         return True
 
     def canBecomeMainWindow(self):
         return True
 
-    def selectNextRow(self):
-        if not hasattr(self, 'table_view'):
-            return
-        row_count = self.table_view.numberOfRows()
-        if row_count == 0:
-            return
-        current = self.table_view.selectedRow()
-        new_row = min(row_count - 1, current + 1) if current >= 0 else 0
-        self.table_view.selectRowIndexes_byExtendingSelection_(
-            AppKit.NSIndexSet.indexSetWithIndex_(new_row), False
-        )
-        self.table_view.scrollRowToVisible_(new_row)
-
-    def selectPreviousRow(self):
-        if not hasattr(self, 'table_view'):
-            return
-        row_count = self.table_view.numberOfRows()
-        if row_count == 0:
-            return
-        current = self.table_view.selectedRow()
-        new_row = max(0, current - 1) if current >= 0 else 0
-        self.table_view.selectRowIndexes_byExtendingSelection_(
-            AppKit.NSIndexSet.indexSetWithIndex_(new_row), False
-        )
-        self.table_view.scrollRowToVisible_(new_row)
-
-    def confirmSelection(self):
-        if not hasattr(self, 'table_view') or not hasattr(self, 'delegate_app'):
-            return
-        row = self.table_view.selectedRow()
-        if row >= 0 and row < len(self.table_view.dataSource().results):
-            doc, score = self.table_view.dataSource().results[row]
-            self.delegate_app.copyToClipboardAndNotify_score_(doc, score)
-            self.orderOut_(None)
-
-    def updateResults_(self, results):
-        self.table_view.dataSource().results = results
-        self.table_view.reloadData()
-        
-        # Select first result by default if available
-        if len(results) > 0:
-            self.table_view.selectRowIndexes_byExtendingSelection_(
-                AppKit.NSIndexSet.indexSetWithIndex_(0), False
-            )
-        
-        # Dynamically calculate window height
-        new_height = 60 + len(results) * 35
-        frame = self.frame()
-        diff = new_height - frame.size.height
-        new_y = frame.origin.y - diff
-        new_frame = AppKit.NSMakeRect(frame.origin.x, new_y, frame.size.width, new_height)
-        self.setFrame_display_animate_(new_frame, True, True)
-
 
 class ShadowMenuApp(AppKit.NSObject):
     def init(self):
         self = objc.super(ShadowMenuApp, self).init()
+        if self is not None:
+            self.recall = DesktopRecall(_desktop_vault, AppHelper.callAfter, self._show_results)
+            self._shortcut_mode = config.get("ui.shortcut") or "option-space"
+            if self._shortcut_mode not in SHORTCUTS:
+                self._shortcut_mode = "off"
+            self._status_loading = False
+            self._search_generation = 0
+            self._displayed = []
         return self
 
     def applicationDidFinishLaunching_(self, notification):
-        # 1. Create System Status Bar Item
-        self.statusItem = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
-            AppKit.NSVariableStatusItemLength
-        )
-        self.statusItem.button().setTitle_("⏣")  # Secure index symbol
-        
-        # 2. Build Menu
-        self.menu = AppKit.NSMenu.alloc().init()
-        
-        statusTitle = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "LatticeShadow: ● Active", None, ""
-        )
-        statusTitle.setEnabled_(False)
-        self.menu.addItem_(statusTitle)
-        self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
-        
-        recallItem = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Recall Semantically...", "showRecallDialog:", "r"
-        )
-        recallItem.setTarget_(self)
-        self.menu.addItem_(recallItem)
+        self.status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
+            AppKit.NSVariableStatusItemLength)
+        self.status_item.button().setTitle_("⏣")
+        menu = AppKit.NSMenu.alloc().init()
+        menu.setDelegate_(self)
+        self.capture_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Capture status: checking…", None, "")
+        self.capture_item.setEnabled_(False)
+        menu.addItem_(self.capture_item)
+        self.pause_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Pause capture", "pauseResume:", "")
+        self.pause_item.setTarget_(self)
+        menu.addItem_(self.pause_item)
+        menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        recall = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Open Recall…", "openRecall:", "r")
+        recall.setTarget_(self)
+        menu.addItem_(recall)
+        shortcut_menu = AppKit.NSMenu.alloc().init()
+        for index, label in enumerate(SHORTCUT_LABELS):
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                label, "chooseShortcut:", "")
+            item.setTarget_(self)
+            item.setTag_(index)
+            shortcut_menu.addItem_(item)
+        shortcut = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Keyboard shortcut", None, "")
+        shortcut.setSubmenu_(shortcut_menu)
+        menu.addItem_(shortcut)
+        self.shortcut_menu = shortcut_menu
+        menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        quit_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Quit LatticeShadow", "terminate:", "q")
+        menu.addItem_(quit_item)
+        self.status_item.setMenu_(menu)
+        self._local_monitor = None
+        self._global_monitor = None
+        self._register_hotkey()
+        self.refreshStatus()
 
-        sleepItem = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Trigger REM Sleep", "triggerSleep:", "s"
-        )
-        sleepItem.setTarget_(self)
-        self.menu.addItem_(sleepItem)
+    def menuNeedsUpdate_(self, menu):
+        self.refreshStatus()
+        for index, item in enumerate(self.shortcut_menu.itemArray()):
+            item.setState_(1 if SHORTCUTS[index] == self._shortcut_mode else 0)
 
-        docItem = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Run Diagnostics (Doctor)", "runDoctor:", "d"
-        )
-        docItem.setTarget_(self)
-        self.menu.addItem_(docItem)
-
-        self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
-
-        quitItem = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Quit", "terminate:", "q"
-        )
-        self.menu.addItem_(quitItem)
-        
-        self.statusItem.setMenu_(self.menu)
-        
-        # 3. Setup global key intercept monitors
-        self.registerHotkeys()
-
-    def registerHotkeys(self):
-        def handle_event(event):
-            flags = event.modifierFlags()
-            is_option = bool(flags & NSEventModifierFlagOption)
-            if is_option and event.keyCode() == 49:  # Option + Space
-                AppHelper.callAfter(self.toggleSpotlight)
+    def _register_hotkey(self):
+        def local(event):
+            if _shortcut_matches(self._shortcut_mode, event):
+                AppHelper.callAfter(self.toggleRecall)
                 return None
             return event
 
-        # Local monitor (when our app is key)
-        self._local_monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
-            NSEventMaskKeyDown, handle_event
-        )
-        # Global monitor (when other apps are key)
-        self._global_monitor = AppKit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-            NSEventMaskKeyDown, handle_event
-        )
+        def global_event(event):
+            if _shortcut_matches(self._shortcut_mode, event):
+                AppHelper.callAfter(self.toggleRecall)
 
-    def showRecallDialog_(self, sender):
-        """Open a native AppleScript dialog to query history."""
-        script = (
-            'tell application "System Events"\n'
-            'activate\n'
-            'set theResult to display dialog "Enter semantic recall query:" default answer "" with title "LatticeShadow Recall"\n'
-            'text returned of theResult\n'
-            'end tell'
-        )
         try:
-            proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
-            query = proc.stdout.strip()
-            if query:
-                self.executeRecall(query)
-        except Exception as e:
-            self.notify("Error", f"Failed to run dialog: {e}")
+            self._local_monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+                KEY_MASK, local)
+            self._global_monitor = AppKit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                KEY_MASK, global_event)
+        except Exception:
+            self._global_monitor = None
+            # The menu action remains available when Input Monitoring is denied.
+            self.capture_item.setTitle_("Shortcut unavailable; use Open Recall…")
+
+    def chooseShortcut_(self, sender):
+        mode = SHORTCUTS[sender.tag()]
+        config.set("ui.shortcut", mode)
+        self._shortcut_mode = mode
+
+    def openRecall_(self, sender):
+        self.showRecall()
 
     @objc.python_method
-    def executeRecall(self, query: str):
-        from latticeshadow import config
-        from latticeshadow.holographic_index import HolographicIndex
-        save_path = os.path.join(config.get_data_dir(), "holographic_today.bin")
-        if not os.path.exists(save_path):
-            self.notify("Error", "No holographic index found. Run REM Sleep first.")
+    def toggleRecall(self):
+        if self.panel.isVisible():
+            self.hideRecall()
+        else:
+            self.showRecall()
+
+    @objc.python_method
+    def showRecall(self):
+        self.panel.center()
+        self.panel.makeKeyAndOrderFront_(None)
+        AppKit.NSApp.activateIgnoringOtherApps_(True)
+        self.panel.makeFirstResponder_(self.search_field)
+        self.refreshStatus()
+        self._request_search()
+
+    @objc.python_method
+    def hideRecall(self):
+        self.recall.invalidate()
+        self.panel.orderOut_(None)
+
+    def applicationWillTerminate_(self, notification):
+        self.recall.close()
+        for monitor in (self._local_monitor, self._global_monitor):
+            if monitor is not None:
+                AppKit.NSEvent.removeMonitor_(monitor)
+
+    @objc.python_method
+    def refreshStatus(self):
+        if self._status_loading:
             return
+        self._status_loading = True
 
-        try:
-            vault = get_vault()
-            if not vault:
-                self.notify("Error", "Vault not found.")
-                return
-            
-            # Retrieve embedding representation of query
-            query_emb = vault._embedder.embed(query)
-            
-            # Load index and recall
-            index = HolographicIndex.load(save_path)
-            result, score = index.recall(query_emb)
-            
-            if result:
-                self.copyToClipboardAndNotify_score_(result, score)
-            else:
-                self.notify("Recall Failed", "No matching memories found.")
-        except Exception as e:
-            self.notify("Error", str(e))
+        def work():
+            try:
+                status = get_status()
+            except Exception as exc:
+                status = {"state": "unavailable", "error": str(exc), "paused": False,
+                          "sources": {}, "consent_needed": []}
+            AppHelper.callAfter(self._show_status, status)
 
-    def copyToClipboardAndNotify_score_(self, doc: str, score: float):
-        AppKit.NSPasteboard.generalPasteboard().clearContents()
-        AppKit.NSPasteboard.generalPasteboard().setString_forType_(doc, AppKit.NSPasteboardTypeString)
-        display_text = doc[:60] + "..." if len(doc) > 60 else doc
-        self.notify("✓ Recalled to Clipboard", f"Match: '{display_text}' (Score: {score:.2f})")
-
-    def triggerSleep_(self, sender):
-        self.notify("REM Sleep", "Consolidation & Dream cycle started...")
-        subprocess.Popen([sys.executable, "-c", "from latticeshadow.shadow_cli import do_sleep; do_sleep()"])
-
-    def runDoctor_(self, sender):
-        script = 'tell application "Terminal" to do script "shadow doctor"'
-        subprocess.run(["osascript", "-e", script])
+        import threading
+        threading.Thread(target=work, daemon=True).start()
 
     @objc.python_method
-    def notify(self, title: str, msg: str):
-        from latticeshadow.notifications import notify_drift
+    def _show_status(self, status):
+        self._status_loading = False
+        state = status["state"]
+        labels = {"capturing": "Capture active", "idle": "No capture sources enabled",
+                  "paused": "Capture paused", "stopped": "Capture stopped",
+                  "consent_needed": "Capture needs consent", "unavailable": "Capture status unavailable"}
+        title = labels.get(state, f"Capture: {state}")
+        active = [name for name, data in status.get("sources", {}).items() if data.get("capturing")]
+        if active:
+            title += " (" + ", ".join(active) + ")"
+        if status.get("error"):
+            title += f" — {status['error']}"
+        self.capture_item.setTitle_(title)
+        self.status_field.setStringValue_(title)
+        self.pause_item.setTitle_("Resume capture" if status.get("paused") else "Pause capture")
+        self.panel_pause.setTitle_("Resume capture" if status.get("paused") else "Pause capture")
+        self._paused = bool(status.get("paused"))
 
-        notify_drift(title, msg)
-
-    def toggleSpotlight(self):
-        if hasattr(self, 'spotlight_window'):
-            if self.spotlight_window.isVisible():
-                self.spotlight_window.orderOut_(None)
-            else:
-                # Reset state
-                self.spotlight_tf.setStringValue_("")
-                self.spotlight_window.updateResults_([])
-                self.spotlight_window.center()
-                self.spotlight_window.makeKeyAndOrderFront_(None)
-                AppKit.NSApp.activateIgnoringOtherApps_(True)
-
-    # ── Text Field & Live Search Delegates ─────────────────────────────────
+    def pauseResume_(self, sender):
+        try:
+            consent.set_paused(not self._paused)
+        except Exception as exc:
+            self._message("Capture state", str(exc))
+        self.refreshStatus()
 
     def controlTextDidChange_(self, notification):
-        tf = notification.object()
-        query = tf.stringValue()
-        self.performLiveSearch_(query)
+        if notification.object() is self.project_field and self.unassigned.state() == 1:
+            self.unassigned.setState_(0)
+        self._schedule_search()
 
-    def performLiveSearch_(self, query: str):
-        if len(query.strip()) < 2:
-            AppHelper.callAfter(self.updateSearchResults_, [])
+    def filterChanged_(self, sender):
+        if sender is self.unassigned and self.unassigned.state() == 1:
+            self.project_field.setStringValue_("")
+        self._schedule_search()
+
+    @objc.python_method
+    def _current_scope(self):
+        return _scope(self.project_field.stringValue(),
+                      self.unassigned.state() == 1,
+                      self.source_field.stringValue(),
+                      self.period.indexOfSelectedItem())
+
+    @objc.python_method
+    def _schedule_search(self):
+        self._search_generation += 1
+        generation = self._search_generation
+        self.recall.invalidate()
+        self._displayed = []
+        self.data_source.events = []
+        self.table.reloadData()
+        self.preview.setString_("")
+        self.result_field.setStringValue_("Searching…")
+        AppHelper.callLater(0.18, self._run_search_if_current, generation)
+
+    @objc.python_method
+    def _run_search_if_current(self, generation):
+        if generation == self._search_generation and self.panel.isVisible():
+            self._request_search()
+
+    @objc.python_method
+    def _request_search(self):
+        self.recall.invalidate()
+        self._displayed = []
+        self.data_source.events = []
+        self.table.reloadData()
+        self.preview.setString_("")
+        self.result_field.setStringValue_("Searching…")
+        self.recall.request(self.search_field.stringValue(), self._current_scope())
+
+    @objc.python_method
+    def _show_results(self, generation, events, error):
+        if not self.panel.isVisible():
             return
+        self._displayed = events
+        self.data_source.events = events
+        self.table.reloadData()
+        if error:
+            self.result_field.setStringValue_(f"Search error: {error}")
+        elif events:
+            self.result_field.setStringValue_(f"{len(events)} results" if self.search_field.stringValue().strip()
+                                              else f"{len(events)} recent events")
+            self.table.selectRowIndexes_byExtendingSelection_(
+                AppKit.NSIndexSet.indexSetWithIndex_(0), False)
+            self._show_selection()
+        else:
+            self.result_field.setStringValue_("No matches" if self.search_field.stringValue().strip()
+                                              else "No recent events")
 
-        def run_search():
-            try:
-                vault = get_vault()
-                if not vault:
-                    return
-                # Semantic search
-                res = vault.search(query, n_results=5)
-                results = []
-                if res and res.documents:
-                    for doc, score in zip(res.documents, res.scores):
-                        results.append((doc, score))
-                AppHelper.callAfter(self.updateSearchResults_, results)
-            except Exception as e:
-                print(f"Background live search error: {e}")
+    @objc.python_method
+    def _selected_id(self):
+        row = self.table.selectedRow()
+        return self._displayed[row]["id"] if 0 <= row < len(self._displayed) else None
 
-        threading.Thread(target=run_search, daemon=True).start()
+    def tableViewSelectionDidChange_(self, notification):
+        self._show_selection()
 
-    def updateSearchResults_(self, results):
-        if hasattr(self, 'spotlight_window'):
-            self.spotlight_window.updateResults_(results)
+    @objc.python_method
+    def _show_selection(self):
+        row = self.table.selectedRow()
+        self.preview.setString_(_preview(self._displayed[row]) if 0 <= row < len(self._displayed) else "")
 
-    def control_textView_doCommandBySelector_(self, control, textView, selector):
-        sel_name = selector.description() if hasattr(selector, 'description') else str(selector)
-        if sel_name == "moveDown:":
-            if hasattr(self, 'spotlight_window'):
-                self.spotlight_window.selectNextRow()
+    @objc.python_method
+    def _live_selected(self):
+        event_id = self._selected_id()
+        if event_id is None:
+            return None
+        try:
+            found = get_events(_desktop_vault(), [event_id], scope=self._current_scope())
+        except Exception as exc:
+            self._message("Memory unavailable", str(exc))
+            return None
+        if not found:
+            self._request_search()
+            self._message("Memory changed", "That event is no longer available in this view.")
+            return None
+        return found[0]
+
+    def copySelected_(self, sender):
+        event = self._live_selected()
+        if event is None:
+            return
+        board = AppKit.NSPasteboard.generalPasteboard()
+        board.clearContents()
+        board.setString_forType_(event["text"], AppKit.NSPasteboardTypeString)
+        self.result_field.setStringValue_("Copied selected event to clipboard")
+
+    def openSelected_(self, sender):
+        event = self._live_selected()
+        if event is None:
+            return
+        target = _open_kind(open_target(event))
+        if target is None:
+            self._message("No supported target", "This event has no web link or local file to open.")
+            return
+        kind, value = target
+        workspace = AppKit.NSWorkspace.sharedWorkspace()
+        if kind == "web":
+            workspace.openURL_(AppKit.NSURL.URLWithString_(value))
+        else:
+            if not Path(value).exists():
+                self._message("Source file missing", "The file no longer exists at its recorded path.")
+                return
+            workspace.activateFileViewerSelectingURLs_([AppKit.NSURL.fileURLWithPath_(value)])
+
+    def assignSelected_(self, sender):
+        event = self._live_selected()
+        if event is None:
+            return
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("Assign a project")
+        alert.setInformativeText_("Enter a project name. Leave blank for Unassigned.")
+        entry = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 300, 24))
+        entry.setStringValue_(event.get("project") or "")
+        alert.setAccessoryView_(entry)
+        alert.addButtonWithTitle_("Assign")
+        alert.addButtonWithTitle_("Cancel")
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            return
+        try:
+            assign_project(_desktop_vault(), [event["id"]], entry.stringValue().strip() or None)
+        except Exception as exc:
+            self._message("Assignment failed", str(exc))
+        self._request_search()
+
+    def forgetSelected_(self, sender):
+        event = self._live_selected()
+        if event is None:
+            return
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("Forget this event?")
+        alert.setInformativeText_("It will disappear from live LatticeShadow views. Older backups and the original source may still contain it.")
+        alert.addButtonWithTitle_("Forget")
+        alert.addButtonWithTitle_("Cancel")
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            return
+        self.recall.invalidate()
+        self._displayed = []
+        self.data_source.events = []
+        self.table.reloadData()
+        self.preview.setString_("")
+        try:
+            outcome = forget_events(_desktop_vault(), [event["id"]])
+            if outcome["cleanup_errors"]:
+                self._message("Cleanup needs attention", "\n".join(outcome["cleanup_errors"]))
+        except Exception as exc:
+            self._message("Forget failed", str(exc))
+        self._request_search()
+
+    def control_textView_doCommandBySelector_(self, control, text_view, selector):
+        name = selector.description() if hasattr(selector, "description") else str(selector)
+        if name == "insertNewline:":
+            self.copySelected_(None)
             return True
-        elif sel_name == "moveUp:":
-            if hasattr(self, 'spotlight_window'):
-                self.spotlight_window.selectPreviousRow()
+        if name == "cancelOperation:":
+            self.hideRecall()
             return True
-        elif sel_name == "insertNewline:":
-            if hasattr(self, 'spotlight_window'):
-                self.spotlight_window.confirmSelection()
+        if name in ("moveDown:", "moveUp:"):
+            row = self.table.selectedRow()
+            row += 1 if name == "moveDown:" else -1
+            row = max(0, min(row, len(self._displayed) - 1))
+            if self._displayed:
+                self.table.selectRowIndexes_byExtendingSelection_(
+                    AppKit.NSIndexSet.indexSetWithIndex_(row), False)
             return True
         return False
 
     def doubleClickRow_(self, sender):
-        if hasattr(self, 'spotlight_window'):
-            self.spotlight_window.confirmSelection()
+        self.copySelected_(sender)
+
+    def windowShouldClose_(self, sender):
+        self.hideRecall()
+        return False
+
+    @objc.python_method
+    def _message(self, title, detail):
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(detail)
+        alert.addButtonWithTitle_("OK")
+        alert.runModal()
 
 
 def setup_spotlight(delegate):
-    # Borderless floating panel
-    rect = AppKit.NSMakeRect(0, 0, 600, 60)
-    style = AppKit.NSWindowStyleMaskNonactivatingPanel | AppKit.NSWindowStyleMaskBorderless | AppKit.NSWindowStyleMaskResizable
-    win = SpotlightWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-        rect, style, AppKit.NSBackingStoreBuffered, False
-    )
-    win.setLevel_(AppKit.NSFloatingWindowLevel)
-    win.setOpaque_(False)
-    win.setBackgroundColor_(AppKit.NSColor.clearColor())
-    win.center()
-    win.setMovableByWindowBackground_(True)
-    win.setHasShadow_(True)
+    rect = AppKit.NSMakeRect(0, 0, 760, 640)
+    style = AppKit.NSWindowStyleMaskTitled | AppKit.NSWindowStyleMaskClosable
+    panel = RecallPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        rect, style, AppKit.NSBackingStoreBuffered, False)
+    panel.setTitle_("LatticeShadow Recall")
+    panel.setLevel_(AppKit.NSFloatingWindowLevel)
+    panel.setDelegate_(delegate)
+    content = panel.contentView()
 
-    # Blurred panel backdrop
-    visual_effect = AppKit.NSVisualEffectView.alloc().initWithFrame_(rect)
-    visual_effect.setMaterial_(AppKit.NSVisualEffectMaterialPopover)
-    visual_effect.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
-    visual_effect.setState_(AppKit.NSVisualEffectStateActive)
-    win.setContentView_(visual_effect)
+    status = _label("Capture status: checking…", AppKit.NSMakeRect(20, 602, 610, 22))
+    content.addSubview_(status)
+    pause = _button("Pause capture", "pauseResume:", delegate, AppKit.NSMakeRect(625, 598, 120, 28))
+    content.addSubview_(pause)
+    search = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(20, 554, 720, 32))
+    search.setPlaceholderString_("Search memories, or leave blank for recent events")
+    search.setDelegate_(delegate)
+    content.addSubview_(search)
 
-    # Enable layer backing on visual_effect
-    visual_effect.setWantsLayer_(True)
+    content.addSubview_(_label("Project", AppKit.NSMakeRect(20, 520, 55, 20)))
+    project = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(75, 516, 170, 25))
+    project.setPlaceholderString_("All projects")
+    project.setDelegate_(delegate)
+    content.addSubview_(project)
+    unassigned = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(255, 514, 125, 28))
+    unassigned.setButtonType_(AppKit.NSSwitchButton)
+    unassigned.setTitle_("Unassigned only")
+    unassigned.setTarget_(delegate)
+    unassigned.setAction_("filterChanged:")
+    content.addSubview_(unassigned)
+    content.addSubview_(_label("Source", AppKit.NSMakeRect(390, 520, 55, 20)))
+    source = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(450, 516, 135, 25))
+    source.setPlaceholderString_("All sources")
+    source.setDelegate_(delegate)
+    content.addSubview_(source)
+    period = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+        AppKit.NSMakeRect(600, 516, 140, 25), False)
+    for title in ("Any time", "Today", "Last 7 days", "Last 30 days"):
+        period.addItemWithTitle_(title)
+    period.setTarget_(delegate)
+    period.setAction_("filterChanged:")
+    content.addSubview_(period)
 
-    # Instantiate GridMetalView
-    grid_view = GridMetalView.alloc().initWithFrame_(rect)
-    grid_view.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
-    grid_view.setWantsLayer_(True)
+    result = _label("Recent events", AppKit.NSMakeRect(20, 483, 720, 22))
+    content.addSubview_(result)
+    scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(20, 263, 720, 215))
+    scroll.setHasVerticalScroller_(True)
+    table = AppKit.NSTableView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 720, 215))
+    column = AppKit.NSTableColumn.alloc().initWithIdentifier_("event")
+    column.setWidth_(700)
+    table.addTableColumn_(column)
+    table.setHeaderView_(None)
+    table.setRowHeight_(27)
+    data_source = ResultsDataSource.alloc().init()
+    table.setDataSource_(data_source)
+    table.setDelegate_(delegate)
+    table.setTarget_(delegate)
+    table.setDoubleAction_("doubleClickRow:")
+    scroll.setDocumentView_(table)
+    content.addSubview_(scroll)
 
-    # Add GridMetalView at index 0 (as the first subview) so it acts as the background
-    visual_effect.addSubview_positioned_relativeTo_(grid_view, AppKit.NSWindowBelow, None)
+    content.addSubview_(_label("Preview and provenance", AppKit.NSMakeRect(20, 236, 300, 22)))
+    preview_scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(20, 72, 720, 160))
+    preview_scroll.setHasVerticalScroller_(True)
+    preview = AppKit.NSTextView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 720, 160))
+    preview.setEditable_(False)
+    preview.setSelectable_(True)
+    preview_scroll.setDocumentView_(preview)
+    content.addSubview_(preview_scroll)
+    for title, action, x in (("Copy", "copySelected:", 20),
+                             ("Open link/file", "openSelected:", 130),
+                             ("Assign project", "assignSelected:", 280),
+                             ("Forget…", "forgetSelected:", 440)):
+        content.addSubview_(_button(title, action, delegate, AppKit.NSMakeRect(x, 26, 135, 32)))
+    content.addSubview_(_label("Return copies · Escape closes · Option–Space opens by default",
+                                AppKit.NSMakeRect(20, 4, 680, 20)))
 
-    # Input Text Field
-    tf = SpotlightTextField.alloc().initWithFrame_(AppKit.NSMakeRect(20, 15, 560, 30))
-    tf.setBezeled_(False)
-    tf.setDrawsBackground_(False)
-    tf.setFocusRingType_(AppKit.NSFocusRingTypeNone)
-    tf.setFont_(AppKit.NSFont.systemFontOfSize_(20))
-    tf.setPlaceholderString_("Search LatticeShadow...")
-    tf.setTextColor_(AppKit.NSColor.textColor())
-    tf.setDelegate_(delegate)
-    tf.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewMinYMargin)
-    tf.setWantsLayer_(True)
-    visual_effect.addSubview_(tf)
-
-    # Results Table Container (initially height 0)
-    scroll_view = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(10, 10, 580, 0))
-    scroll_view.setHasVerticalScroller_(True)
-    scroll_view.setDrawsBackground_(False)
-    scroll_view.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
-    scroll_view.setWantsLayer_(True)
-    visual_effect.addSubview_(scroll_view)
-
-    # Autocomplete Matches Table View
-    table_view = AppKit.NSTableView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 580, 0))
-    col = AppKit.NSTableColumn.alloc().initWithIdentifier_("ResultColumn")
-    col.setWidth_(560)
-    col.setResizingMask_(AppKit.NSTableColumnNoResizing)
-    
-    cell = AppKit.NSTextFieldCell.alloc().init()
-    cell.setFont_(AppKit.NSFont.fontWithName_size_("JetBrains Mono", 13.0) or AppKit.NSFont.systemFontOfSize_(13.0))
-    cell.setTextColor_(AppKit.NSColor.textColor())
-    col.setDataCell_(cell)
-    
-    table_view.addTableColumn_(col)
-    table_view.setHeaderView_(None)
-    table_view.setBackgroundColor_(AppKit.NSColor.clearColor())
-    table_view.setRowHeight_(35.0)
-    table_view.setDoubleAction_("doubleClickRow:")
-    table_view.setTarget_(delegate)
-
-    ds = SearchResultsDataSource.alloc().init()
-    table_view.setDataSource_(ds)
-    table_view.setDelegate_(ds)
-    scroll_view.setDocumentView_(table_view)
-
-    # Connect components
-    win.table_view = table_view
-    win.delegate_app = delegate
-    
-    delegate.spotlight_window = win
-    delegate.spotlight_tf = tf
+    delegate.panel = panel
+    delegate.search_field = search
+    delegate.project_field = project
+    delegate.unassigned = unassigned
+    delegate.source_field = source
+    delegate.period = period
+    delegate.table = table
+    delegate.data_source = data_source
+    delegate.preview = preview
+    delegate.result_field = result
+    delegate.status_field = status
+    delegate.panel_pause = pause
+    delegate._paused = False
+    return panel
 
 
 def run_menu_app():
     AppKit.NSApplicationLoad()
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
-    
     delegate = ShadowMenuApp.alloc().init()
     app.setDelegate_(delegate)
-    
     setup_spotlight(delegate)
-    
     AppHelper.runEventLoop()
