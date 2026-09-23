@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import latticeshadow.menu as menu_module
 from latticeshadow.desktop_recall import DesktopRecall
 from latticeshadow.menu import (
     ShadowMenuApp, _desktop_vault, _open_kind, _preview, _row_label, _scope,
@@ -172,7 +173,7 @@ def test_menu_selection_actions_bind_to_live_id_and_scope():
 
 @pytest.mark.parametrize("key_code", [36, 76])
 def test_return_on_focused_result_copies_live_event(key_code):
-    import AppKit
+    AppKit = menu_module.AppKit
 
     AppKit.NSApplicationLoad()
     app = ShadowMenuApp.alloc().init()
