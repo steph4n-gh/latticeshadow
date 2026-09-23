@@ -1,6 +1,6 @@
 # Daily-use alpha: execution plan
 
-Status: **implementation in progress; acceptance gates remain open**. Baseline: merged PR #4,
+Status: **candidate validation in progress; acceptance gates remain open**. Baseline: merged PR #4,
 commit `ecb600da7103091b95627604850d6c0f2a09da70`. Target: the LatticeShadow 0.2
 daily-use alpha. This document is the implementation handoff and coordination
 contract. It turns the [improvement sprint](SPRINT.md) into one sustained campaign.
@@ -437,27 +437,27 @@ install claim (P1) and Gatekeeper claim (P2) retain pending evidence as applicab
 
 The coordinator fills this table during implementation. Every pass needs a commit
 SHA, command/profile, result and report location. Raw generated artifacts stay
-outside Git; sanitized summaries can live in `docs/validation/`. All rows start
-**planned**, not passed. The numerical targets are commitments to measure, not
+outside Git; sanitized summaries can live in `docs/validation/`. Rows began
+**planned** and move only with evidence. The numerical targets are commitments to measure, not
 predictions. Fix failures or report them; never lower a target after seeing scores
 just to turn the table green.
 
 | ID | Required result | Evidence | State |
 | --- | --- | --- | --- |
-| M1 | Stable IDs and correct occurrence/ingestion times across sources, migration and rebuild | Legacy fixture, duplicate/retry and timestamp tests | Planned |
-| M2 | Filters correct before ranking/limits; zero excluded records returned | Project/source/time boundary cases through CLI/UI/MCP | Planned |
-| M3 | Cross-process writes/deletes/rebuilds stay consistent; no resurrection after fault/restart | Subprocess crash and existing-reader tests | Planned |
-| M4 | Retention/exclusions/consent/pause behave as documented; experiments off by default | Synthetic capture and reboot scenarios | Planned |
-| M5 | Portable recovery preserves canonical fields in fresh guest without source key; failures leave old vault usable | Archive validation/failure matrix and fresh-VM restore | Planned |
-| R1 | Hit@5 at least 90% on 200 held-out answerable queries; 50 no-answer cases reported separately | Frozen corpus/model/commit, baselines and failing-case report | Planned |
-| R2 | Warm user-visible search p95 below 500 ms over 10,000 events on the Mini; cold cost reported separately | Fixed workload and hardware performance report | Planned |
-| U1 | Actual keyboard/menu → filter/preview/copy/open/assign/forget flow works; stale searches cannot overwrite state | UI logic tests, logged-in guest interaction and screenshots | Planned |
-| A1 | Every MCP surface enforces grant; scope widening/revocation/direct-ID/nested-secret cases pass | Independent SDK subprocess suite, hostile synthetic fixtures | Planned |
-| A2 | A real assistant host retrieves and resolves a citation in the allowed scope | Host/version/config and sanitized walkthrough | Planned |
-| P1 | Standalone app works without development tools; install/upgrade/uninstall preserve chosen state | Minimal-guest install, upgrade artifact VM profile and checksum | Planned; minimal guest required |
-| P2 | Final signed/notarized artifact opens under stock Gatekeeper/quarantine | Credential-backed signing checks and stock-guest launch | Planned; external inputs may be needed |
-| E1 | Integrated cross-surface journey and 2-hour candidate soak pass; resource behavior reported | Candidate SHA/artifact, workload and elapsed-time logs | Planned |
-| E2 | Standard suites/docs, model tests, native/build checks and final independent review pass for integrated change | Local/CI results and resolved review findings | Planned |
+| M1 | Stable IDs and correct occurrence/ingestion times across sources, migration and rebuild | `0af8643`; `make test-db` 228, `make test-cli` 217; timeline/rebuild tests in those suites | Passed locally |
+| M2 | Filters correct before ranking/limits; zero excluded records returned | CLI/UI logic/MCP tests pass; actual guest panel filter flow awaits U1 | Pending guest UI |
+| M3 | Cross-process writes/deletes/rebuilds stay consistent; no resurrection after fault/restart | `44482e8`; `validate_lifecycle.py lifecycle` 12/12, `benchmark_results/alpha-lifecycle-integrated.json` | Passed locally |
+| M4 | Retention/exclusions/consent/pause behave as documented; experiments off by default | `0af8643` CLI suite includes consent, retention, rapid pause/resume; reboot scenario awaits guest | Pending reboot check |
+| M5 | Portable recovery preserves canonical fields in fresh guest without source key; failures leave old vault usable | `44482e8` lifecycle and backup tests pass; fresh-guest restore awaits final artifact | Pending fresh guest |
+| R1 | Hit@5 at least 90% on 200 held-out answerable queries; 50 no-answer cases reported separately | `44482e8`; `evaluate_recall.py` 0.960 hit@5, 0.888 MRR@10; [scorecard](validation/recall-local.md) | Passed locally |
+| R2 | Warm user-visible search p95 below 500 ms over 10,000 events on the Mini; cold cost reported separately | Reproducible performance driver exists; full exclusive Mini run awaits handoff | Pending Mini run |
+| U1 | Actual keyboard/menu → filter/preview/copy/open/assign/forget flow works; stale searches cannot overwrite state | `0af8643` UI logic in CLI suite; integrated guest panel interaction and screenshot await final app | Pending guest UI |
+| A1 | Every MCP surface enforces grant; scope widening/revocation/direct-ID/nested-secret cases pass | `0af8643` focused MCP tests 8/8; independent SDK and cross-surface checks described in [MCP guide](MCP.md) | Passed locally |
+| A2 | A real assistant host retrieves and resolves a citation in the allowed scope | `7b7ba5d`; synthetic Codex CLI walkthrough in [MCP guide](MCP.md) | Passed locally |
+| P1 | Standalone app works without development tools; install/upgrade/uninstall preserve chosen state | `7b7ba5d` stripped guest saved/searched offline but exposed a broken daemon launcher; fixed in `9a5e528`, final artifact and upgrade checks pending | Pending rebuilt app |
+| P2 | Final signed/notarized artifact opens under stock Gatekeeper/quarantine | Current app is unsigned; credentials and stock-guest check not yet supplied | Pending external signing |
+| E1 | Integrated cross-surface journey and 2-hour candidate soak pass; resource behavior reported | `44482e8` CLI/MCP/delete/restart journey passes; desktop journey and actual 2-hour soak pending | Pending guest and elapsed run |
+| E2 | Standard suites/docs, model tests, native/build checks and final independent review pass for integrated change | `0af8643`: DB 228, CLI 217, model 2, docs pass; three review findings fixed; final app/CI checks pending | Pending final CI/lab |
 
 A 24-hour soak is optional additional release evidence, with its own pending/pass
 entry if started; the 2-hour result must never be described as multi-day testing.
@@ -580,3 +580,21 @@ without sending agents back to rediscover the repository.
   work after P releases the exclusive Mini lease. A is implementing grants and
   read-only scoped MCP against the integrated API. P has an offline bundle
   build/verification smoke; minimal-guest and Gatekeeper evidence remain open.
+- The integrated retrieval path at `44482e8` scored 0.960 hit@5 and 0.888
+  MRR@10 on 200 held-out real-model questions. All 50 no-answer questions
+  received suggestions; the result is not an abstention claim. The same
+  commit's synthetic lifecycle driver passed 12 subprocess/fault and
+  CLI/MCP/delete/restart checks. Codex CLI completed a scoped recall and live
+  citation resolution on synthetic notes at `7b7ba5d`.
+- Independent review found three privacy/lifecycle defects: concurrent grant
+  edits could restore a revoked grant, concurrent config edits could undo a
+  pause, and the daemon could replay terminal commands from a paused interval.
+  `21c6212`, `f9943b3`, and `0af8643` serialize edits and track terminal
+  consent transitions, including a rapid off/on between daemon polls.
+- The stripped guest installed the exact `7b7ba5d` app and saved/searched
+  synthetic data offline. Its `shadow enable` then exposed a py2app helper
+  path in the launch agent; `9a5e528` points the plist at the app launcher.
+  The guest also showed a software Keychain fallback while CLI output claimed
+  Secure Enclave wrapping; `22e40fb` corrected the wording. Both fixes need
+  confirmation on the rebuilt `0af8643` artifact. At `0af8643`, local DB,
+  CLI and model suites passed 228, 217 and 2 tests respectively; docs passed.
