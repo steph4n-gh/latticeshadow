@@ -170,6 +170,31 @@ def test_menu_selection_actions_bind_to_live_id_and_scope():
         app._request_search.assert_not_called()
 
 
+@pytest.mark.parametrize("key_code", [36, 76])
+def test_return_on_focused_result_copies_live_event(key_code):
+    import AppKit
+
+    AppKit.NSApplicationLoad()
+    app = ShadowMenuApp.alloc().init()
+    panel = setup_spotlight(app)
+    try:
+        app._displayed = [event()]
+        app.data_source.events = app._displayed
+        app.table.reloadData()
+        app.table.selectRowIndexes_byExtendingSelection_(
+            AppKit.NSIndexSet.indexSetWithIndex_(0), False)
+        with patch("latticeshadow.menu.get_vault", return_value=object()), \
+             patch("latticeshadow.menu.get_events", return_value=[event()]) as get, \
+             patch("latticeshadow.menu.AppKit.NSPasteboard") as board:
+            app.table.keyDown_(SimpleNamespace(keyCode=lambda: key_code))
+        get.assert_called_once()
+        board.generalPasteboard.return_value.setString_forType_.assert_called_once_with(
+            "remember this", AppKit.NSPasteboardTypeString)
+        assert app.result_field.stringValue() == "Copied selected event to clipboard"
+    finally:
+        panel.close()
+
+
 def test_open_selected_uses_workspace_only_for_supported_targets():
     app = ShadowMenuApp.alloc().init()
     item = event()

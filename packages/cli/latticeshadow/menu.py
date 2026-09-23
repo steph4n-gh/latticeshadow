@@ -186,6 +186,14 @@ class ResultsDataSource(AppKit.NSObject):
         return _row_label(self.events[row]) if 0 <= row < len(self.events) else ""
 
 
+class ResultsTable(AppKit.NSTableView):
+    def keyDown_(self, event):
+        if event.keyCode() in (36, 76):  # Return and keypad Enter
+            self.target().copySelected_(self)
+            return
+        objc.super(ResultsTable, self).keyDown_(event)
+
+
 class RecallPanel(AppKit.NSPanel):
     def canBecomeKeyWindow(self):
         return True
@@ -627,7 +635,7 @@ def setup_spotlight(delegate):
     scroll.setHasVerticalScroller_(True)
     scroll.setBorderType_(AppKit.NSNoBorder)
     scroll.setBackgroundColor_(SLATE)
-    table = AppKit.NSTableView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 400, 312))
+    table = ResultsTable.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 400, 312))
     column = AppKit.NSTableColumn.alloc().initWithIdentifier_("event")
     column.setWidth_(380)
     table.addTableColumn_(column)
