@@ -58,6 +58,11 @@ def classify(path: str) -> Checks:
         return BUNDLE
     if path == "packages/cli/scripts/verify_docs.py":
         return NONE
+    if path == "packages/cli/scripts/evaluate_recall.py":
+        return MODEL
+    if path in {"packages/cli/scripts/validate_lifecycle.py",
+                "packages/cli/scripts/validate_mcp_client.py"}:
+        return MAC
     if path.startswith("packages/cli/evaluation/") or path.startswith("docs/validation/"):
         return NONE
     if path.startswith("packages/cli/tests/"):

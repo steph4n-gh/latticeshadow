@@ -15,6 +15,11 @@ class PathSelectionTests(unittest.TestCase):
 
     def test_cli_test_runs_core_only(self):
         self.assertEqual(select(["packages/cli/tests/test_menu.py"]), MAC)
+        self.assertEqual(select(["packages/cli/scripts/validate_lifecycle.py"]), MAC)
+        self.assertEqual(select(["packages/cli/scripts/validate_mcp_client.py"]), MAC)
+
+    def test_recall_evaluator_needs_model_but_not_bundle(self):
+        self.assertEqual(select(["packages/cli/scripts/evaluate_recall.py"]), MODEL)
 
     def test_memory_or_model_change_runs_model(self):
         self.assertEqual(select(["packages/cli/latticeshadow/timeline.py"]), MODEL)
