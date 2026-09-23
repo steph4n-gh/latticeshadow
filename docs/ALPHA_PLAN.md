@@ -1,6 +1,6 @@
 # Daily-use alpha: execution plan
 
-Status: **planned; implementation has not started**. Baseline: merged PR #4,
+Status: **implementation in progress; acceptance gates remain open**. Baseline: merged PR #4,
 commit `ecb600da7103091b95627604850d6c0f2a09da70`. Target: the LatticeShadow 0.2
 daily-use alpha. This document is the implementation handoff and coordination
 contract. It turns the [improvement sprint](SPRINT.md) into one sustained campaign.
@@ -543,5 +543,24 @@ without sending agents back to rediscover the repository.
 - Planning baseline: three independent planning reviews covered memory/durability,
   desktop/MCP, and evaluation/packaging. Contracts and ownership reconciled here.
   Follow-up review clarified retry/deletion bookkeeping, staging protection,
-  exclusive lab ownership and minimal-guest evidence. No product code changed.
-  All implementation/evidence gates remain planned.
+  exclusive lab ownership and minimal-guest evidence.
+- Coordinator commits `6fc96f6` and `a7d6aec` add persistent capture pause,
+  observable status, atomic config writes, and explicit consent gates for optional
+  background services. CLI suite: 168 passed, 5 deselected; focused follow-up:
+  40 passed, then 4 changed-risk cases passed. Documentation check passed.
+  These prove the affected local behaviors, not the entire M4/desktop gate.
+- G0 working contract: text at most 1 MiB UTF-8, metadata at most 64 KiB JSON,
+  ID/source/project at most 256 UTF-8 bytes; fetch limit 1–500, search 1–100,
+  direct get/forget at most 1000 IDs. `fetch_events` returns `{events,next_cursor}`;
+  `forget_events` returns `{canonical_deleted,derived_invalidated,cleanup_errors}`.
+  C is implementing and testing this contract in its isolated worktree.
+- R's first synthetic baseline found top-five hit rates of 0.76 for shipped
+  encrypted hybrid, 0.895 for exact cosine, 0.92 for in-memory keyword, and
+  0.96 for development-tuned fusion on 200 held-out answerable queries.
+  The authored fixture, report and retrieval code are still on R's worker branch;
+  none of these numbers satisfies R1 until integrated and independently rerun.
+  Development negatives did not support a useful abstention threshold, so
+  results must remain labeled suggestions rather than confident answers.
+- P has exclusive Mini access for its bundle feasibility spike. py2app initially
+  hit modulegraph recursion while scanning the Python model stack; the revised
+  build is being measured. P1/P2 remain open.
