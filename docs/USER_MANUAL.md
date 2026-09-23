@@ -275,8 +275,8 @@ permission behavior are still under validation.
 With the Recall panel open:
 
 1. Leave search empty for recent events, or type a query for ranked matches.
-2. Narrow by exact project, **Unassigned only**, source, and Any time/Today/Last
-   7 days/Last 30 days.
+2. Narrow by **Project**, **Unassigned only**, **Source**, and **When** (Any
+   time/Today/Last 7 days/Last 30 days).
 3. Select a row to read its preview, source, project, occurrence/capture times,
    and local event reference.
 4. **Copy** puts the full current event text on the clipboard; Return also
@@ -522,7 +522,10 @@ first-run checklist.
 | `Open Recall…` | Open the Recall panel; `shadow gui` starts the menu bar client. |
 | `Keyboard shortcut` | Choose `Off`, `Option–Space`, `Control–Option–Space`, or `Command–Option–Space`. |
 | `Pause capture` / `Resume capture` | Change the persistent capture state; `shadow pause` / `shadow resume`. |
+| `Project` | Filter by an exact project label; an empty field includes all projects. |
 | `Unassigned only` | Limit panel results to events without a project; `shadow timeline --unassigned`. |
+| `Source` | Filter by an exact source label; an empty field includes all sources. |
+| `When` | Choose Any time, Today, Last 7 days, or Last 30 days. |
 | `Copy` | Copy the selected event's complete text to the clipboard. |
 | `Open link/file` | Open a supported web link or reveal an existing local file; `shadow open-context`. |
 | `Assign project` | Set a project or leave it blank for Unassigned; `shadow assign-project`. |

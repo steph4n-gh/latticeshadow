@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- markdown-sha256: c94a7d33c0fd305c22b71b700fe260c5899d30d68629f4df91b6fe59f9fdc027 -->
+<!-- markdown-sha256: a0c12ca8dcbfcc0ff4e92abdafa7573b32b937a3dfe1bf0ddf0259780c8cc5b5 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -358,8 +358,9 @@
       <ol type="1">
       <li>Leave search empty for recent events, or type a query for
       ranked matches.</li>
-      <li>Narrow by exact project, <strong>Unassigned only</strong>,
-      source, and Any time/Today/Last 7 days/Last 30 days.</li>
+      <li>Narrow by <strong>Project</strong>, <strong>Unassigned
+      only</strong>, <strong>Source</strong>, and <strong>When</strong>
+      (Any time/Today/Last 7 days/Last 30 days).</li>
       <li>Select a row to read its preview, source, project,
       occurrence/capture times, and local event reference.</li>
       <li><strong>Copy</strong> puts the full current event text on the
@@ -974,9 +975,23 @@
       / <code>shadow resume</code>.</td>
       </tr>
       <tr>
+      <td><code>Project</code></td>
+      <td>Filter by an exact project label; an empty field includes all
+      projects.</td>
+      </tr>
+      <tr>
       <td><code>Unassigned only</code></td>
       <td>Limit panel results to events without a project;
       <code>shadow timeline --unassigned</code>.</td>
+      </tr>
+      <tr>
+      <td><code>Source</code></td>
+      <td>Filter by an exact source label; an empty field includes all
+      sources.</td>
+      </tr>
+      <tr>
+      <td><code>When</code></td>
+      <td>Choose Any time, Today, Last 7 days, or Last 30 days.</td>
       </tr>
       <tr>
       <td><code>Copy</code></td>

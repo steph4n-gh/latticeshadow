@@ -227,7 +227,8 @@ def verify_product_manual(repo_root: str) -> List[str]:
 
     recall_controls = (
         "Open Recall…", "Pause capture", "Resume capture", "Copy",
-        "Open link/file", "Assign project", "Forget…", "Unassigned only",
+        "Open link/file", "Assign project", "Forget…", "Project", "Source",
+        "When", "Unassigned only",
     )
     for label in recall_controls:
         if label not in menu_strings:
