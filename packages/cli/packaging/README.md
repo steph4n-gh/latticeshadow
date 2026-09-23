@@ -186,6 +186,8 @@ events at p95 300.57 ms; the cold first call took 5.36 s. See the
 [final package lab report](../../../docs/validation/mini-b603-packaged-2026-09-23.md)
 for the workload and limits.
 
-Interactive Keychain approval, successful legacy 0.1.0 vault decryption, final
-styled GUI inspection, stock Gatekeeper first launch, Developer ID signing,
-and notarization remain open checks before a public binary release.
+The exact app also passed a [logged-in packaged Recall journey](../../../docs/validation/desktop-gui.md)
+with synthetic data. Interactive Keychain approval, successful legacy 0.1.0
+vault decryption, cross-app shortcut behavior, stock Gatekeeper first launch,
+Developer ID signing, and notarization remain open checks before a public
+binary release.

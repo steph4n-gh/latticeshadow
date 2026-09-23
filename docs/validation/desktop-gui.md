@@ -45,8 +45,8 @@ therefore that status text is visual evidence only, not proof of daemon state.
 
 The dark panel rendered in the logged-in session with readable search, results,
 preview, provenance, and action controls. An inline panel image was inspected,
-but no sanitized image file was retained for documentation. A packaged-app
-check of this styled revision and cross-app shortcut behavior remain open.
+but no sanitized image file was retained for documentation. The later
+packaged-app check is recorded above; cross-app shortcut behavior remains open.
 
 ## Earlier installed-app validation
 
@@ -68,7 +68,7 @@ that artifact, not for a later source revision or a signed release.
 | Forget | A confirmation warned that older backups and the original source may still contain the event. After confirmation, the active search returned **No matches** and the preview remained empty. |
 | Pause/Resume | The menu changed from **Pause capture** to **Resume capture** and back. It continued to report **Capture stopped**, consistent with the absent daemon. |
 
-## Open checks
+## Open checks from the earlier installed-app run
 
 - The global Option-Space shortcut did not open Recall through Screen Sharing.
   Selecting Control-Option-Space changed the menu checkmark, but injecting that
