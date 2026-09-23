@@ -88,7 +88,9 @@ jobs:
         run: env -u SDKROOT xcrun swift build --package-path packages/cli/native -c release
       - name: Build app candidate
         if: needs.database.outputs.run_bundle == 'true'
-        run: .venv/bin/python packages/cli/packaging/setup_app.py py2app
+        run: |
+          .venv/bin/python -m pip install -e './packages/cli[build]'
+          .venv/bin/python packages/cli/packaging/setup_app.py py2app
       - name: Verify bundled app
         if: needs.database.outputs.run_bundle == 'true'
         run: python3 scripts/validation/verify_app.py dist/LatticeShadow.app > app-report.json

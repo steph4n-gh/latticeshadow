@@ -11,6 +11,7 @@ On an Apple Silicon Mac with Xcode Command Line Tools and Python 3.12:
 
 ```sh
 make setup
+.venv/bin/python -m pip install -e './packages/cli[build]'
 .venv/bin/python packages/cli/packaging/setup_app.py py2app
 python3 scripts/validation/verify_app.py dist/LatticeShadow.app > app-report.json
 ditto -c -k --sequesterRsrc --keepParent dist/LatticeShadow.app LatticeShadow-arm64.zip
