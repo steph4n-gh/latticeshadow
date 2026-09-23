@@ -424,7 +424,8 @@ def test_cli_install(setup_test_env, mock_subprocess_run, capsys):
 def test_app_install_launches_bundled_daemon(setup_test_env, mock_subprocess_run, monkeypatch):
     cli = setup_test_env["shadow_cli"]
     executable = "/Applications/LatticeShadow.app/Contents/MacOS/LatticeShadow"
-    monkeypatch.setattr(cli.sys, "executable", executable)
+    # py2app reports its helper as sys.executable from inside the app.
+    monkeypatch.setattr(cli.sys, "executable", "/Applications/LatticeShadow.app/Contents/MacOS/python")
     cli.do_install()
     with open(setup_test_env["plist_path"], "rb") as stream:
         assert plistlib.load(stream)["ProgramArguments"] == [executable, "--daemon"]

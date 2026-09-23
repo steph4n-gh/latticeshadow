@@ -439,7 +439,9 @@ def _get_daemon_path():
 
 def _daemon_argv():
     if ".app/Contents/MacOS/" in sys.executable:
-        return [sys.executable, "--daemon"]
+        # py2app sets sys.executable to its bundled python helper even when the
+        # user entered through LatticeShadow. launchd needs the app entry point.
+        return [str(Path(sys.executable).parent / "LatticeShadow"), "--daemon"]
     return [_get_python_path(), _get_daemon_path()]
 
 def _configure_shell(enable: bool) -> None:
