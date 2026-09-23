@@ -146,8 +146,9 @@ output parsed as JSON containing both retained IDs.
 That fresh target's key remained in the legacy raw format because its headless
 session could not create a software Keychain keypair. The specific
 first-use **key migration notice** was therefore not triggered in this run,
-although the first-use JSON output was clean. The full packaged performance and
-backup repeat is in progress separately. Developer ID signing, notarization,
+although the first-use JSON output was clean. The later `b603442` candidate
+superseded this archive for the full packaged performance and recovery repeat.
+Developer ID signing, notarization,
 stock Gatekeeper behavior, interactive Keychain approval, and the final styled
 GUI journey remain outside this packaged regression check.
 
