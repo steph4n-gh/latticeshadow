@@ -104,7 +104,7 @@ had no Developer ID Application signing identity, and no notarization credential
 environment variables were present. Signed/notarized first-launch validation
 remains pending.
 
-## Final alpha candidate
+## Prior alpha candidate
 
 The later 0.2.0 candidate from source commit
 `d1c3e3bb7ac2c0b0c272bc9ebddb8ad963c10b27` produced a 425,565,684-byte
@@ -124,3 +124,29 @@ interactive login approval. The final styled GUI journey, successful
 and notarization are still pending. See the
 [exact-artifact validation report](../../../docs/validation/packaged-app-2026-09-23.md)
 for the observations, including the abrupt Tart-stop pause discrepancy.
+
+## Packaged regression candidate
+
+The later candidate from source commit
+`7ccc29c1c62828e5c3a0f41bdb2a9d9ff89eb776` produced a 425,566,640-byte
+ZIP with SHA-256
+`651b313ff911d9da67c09fcfdc83581161cab53f701e49f418d7a7e1240a31c0`.
+The app verifier passed for version 0.2.0, the arm64 launcher, offline bundled
+model and native resources, ad-hoc signature, and 307 Mach-O library links.
+The exact ZIP checksum matched in a stripped install guest.
+
+Offline manual save/search returned an authored note. Using a retained
+synthetic portable-backup fixture, a wrong-passphrase restore exited nonzero
+in under one second, reported authentication failure, created no destination,
+and showed no py2app launch error. A correct restore and inspection reopened
+two retained events and one deletion tombstone. In a separate fresh target,
+the full restore/activation script completed and its first `timeline --json`
+output parsed as JSON containing both retained IDs.
+
+That fresh target's key remained in the legacy raw format because its headless
+session could not create a software Keychain keypair. The specific
+first-use **key migration notice** was therefore not triggered in this run,
+although the first-use JSON output was clean. The full packaged performance and
+backup repeat is in progress separately. Developer ID signing, notarization,
+stock Gatekeeper behavior, interactive Keychain approval, and the final styled
+GUI journey remain outside this packaged regression check.
