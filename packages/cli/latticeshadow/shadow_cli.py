@@ -221,9 +221,9 @@ def get_vault(create_if_missing=False):
     db_path = get_db_path()
     if not os.path.exists(db_path):
         if not create_if_missing:
-            print("Error: LatticeShadow database not found. Is the daemon running?")
-            print("  Run: shadow enable")
-            sys.exit(1)
+            raise SystemExit(
+                "LatticeShadow database not found. Save a note or run: shadow enable"
+            )
         os.makedirs(os.path.dirname(db_path), mode=0o700, exist_ok=True)
         os.chmod(os.path.dirname(db_path), 0o700)
 
@@ -239,10 +239,11 @@ def get_vault(create_if_missing=False):
             device=config.get_device(),
         )
     except PermissionError:
-        print("Cannot decrypt the existing vault with the available master key.")
-        print("  Data was not changed. Check Keychain access in an unlocked macOS session;")
-        print("  if the key is truly lost, restore a portable backup into a new destination.")
-        sys.exit(1)
+        raise SystemExit(
+            "Cannot decrypt the existing vault with the available master key. "
+            "Data was not changed. Check Keychain access in an unlocked macOS session; "
+            "if the key is truly lost, restore a portable backup into a new destination."
+        ) from None
     except ValueError as exc:
         if "embedding model" in str(exc):
             raise SystemExit("Stored vectors use an older embedding model. Run: shadow disable && shadow rebuild-index --yes") from exc
@@ -407,12 +408,18 @@ def do_shred():
                 hot_vault.crypto_shred()
             except Exception as e:
                 print(f"Warning: Hot index shred failed: {e}")
-        # Also destroy the Keychain entry
+        # Report Keychain deletion separately; a locked login keychain can
+        # refuse it after the vault itself has already been shredded.
         try:
-            keychain.delete_key()
-        except Exception:
-            pass
-        print("\033[92mSUCCESS\033[0m: Keys zeroed. Database scrambled. Keychain entry destroyed. History destroyed.")
+            keychain_removed = keychain.delete_key()
+        except Exception as exc:
+            keychain_result = f"Warning: Keychain entry could not be removed: {exc}"
+        else:
+            keychain_result = (
+                "Keychain entry removed." if keychain_removed else "No Keychain entry was found."
+            )
+        print("\033[92mSUCCESS\033[0m: Vault crypto-shred completed.")
+        print(keychain_result)
     else:
         print("Aborted.")
 

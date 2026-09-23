@@ -926,6 +926,31 @@ def test_cli_shred(setup_test_env, capsys):
         cli.get_vault()
 
 
+def test_shred_reports_locked_keychain_without_false_deletion_claim(
+        setup_test_env, monkeypatch, capsys):
+    from latticeshadow import keychain
+
+    cli = setup_test_env["shadow_cli"]
+    shredded = []
+
+    class StubVault:
+        def crypto_shred(self):
+            shredded.append(True)
+
+    def locked():
+        raise keychain.KeychainLocked("login keychain locked")
+
+    monkeypatch.setattr(cli, "get_vault", lambda: StubVault())
+    monkeypatch.setattr(cli, "hot_collection_exists", lambda _path: False)
+    monkeypatch.setattr(keychain, "delete_key", locked)
+    run_cli(cli, ["shred"], mock_input="SHRED")
+    out = capsys.readouterr().out
+    assert shredded == [True]
+    assert "Vault crypto-shred completed" in out
+    assert "Keychain entry could not be removed" in out
+    assert "Keychain entry destroyed" not in out
+
+
 def test_existing_wrapped_key_is_never_replaced_when_keychain_unavailable(setup_test_env, monkeypatch):
     from latticeshadow import security
 
@@ -1034,6 +1059,28 @@ def test_key_migration_notice_does_not_break_json_stdout(
     out, err = capsys.readouterr()
     assert out == ""
     assert "Migrated flat-file legacy master key" in err
+
+
+def test_missing_vault_error_leaves_stdout_clear(setup_test_env, capsys):
+    cli = setup_test_env["shadow_cli"]
+    with pytest.raises(SystemExit, match="LatticeShadow database not found"):
+        cli.get_vault()
+    assert capsys.readouterr().out == ""
+
+
+def test_wrong_vault_key_error_leaves_stdout_clear(setup_test_env, monkeypatch, capsys):
+    cli = setup_test_env["shadow_cli"]
+    setup_test_env["db_path"].parent.mkdir(parents=True, exist_ok=True)
+    setup_test_env["db_path"].write_bytes(b"encrypted vault fixture")
+    monkeypatch.setattr(cli, "get_or_create_master_key", lambda: "a" * 64)
+
+    def refuses_wrong_key(**_kwargs):
+        raise PermissionError("wrong key")
+
+    monkeypatch.setattr(cli, "open_main_vault", refuses_wrong_key)
+    with pytest.raises(SystemExit, match="Cannot decrypt the existing vault"):
+        cli.get_vault()
+    assert capsys.readouterr().out == ""
 
 
 def test_daemon_refuses_to_replace_inaccessible_existing_key(setup_test_env, monkeypatch):
