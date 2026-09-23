@@ -140,10 +140,12 @@ def test_timeline_fetch_and_search_normalizes_existing_rows(tmp_path):
 
 def test_mcp_recall_redacts_sensitive_text(tmp_path):
     from latticeshadow.mcp_server import handle_request
+    from latticeshadow.sharing import create_grant
 
     db_path = tmp_path / "shadow.sqlite"
     _make_timeline_db(db_path)
     vault = FakeVault(db_path)
+    grant = create_grant(tmp_path, projects=[None], sources=["clipboard"])
 
     response = handle_request(
         {
@@ -158,6 +160,8 @@ def test_mcp_recall_redacts_sensitive_text(tmp_path):
         lambda: vault,
         str(db_path),
         str(tmp_path),
+        grant_id=grant["id"],
+        startup_ceiling=grant,
     )
 
     text = response["result"]["content"][0]["text"]
@@ -184,56 +188,7 @@ def test_mcp_lists_tools_without_opening_vault(tmp_path):
     assert called is False
     names = {tool["name"] for tool in response["result"]["tools"]}
     assert "latticeshadow.recall" in names
-    assert "latticeshadow.forget" in names
-
-
-def test_mcp_forget_uses_supplied_forgetter(tmp_path):
-    from latticeshadow.mcp_server import handle_request
-
-    seen = []
-
-    response = handle_request(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "latticeshadow.forget",
-                "arguments": {"ids": ["clip_1"], "confirm": "FORGET"},
-            },
-        },
-        lambda: None,
-        str(tmp_path / "shadow.sqlite"),
-        str(tmp_path),
-        forgetter=lambda ids: seen.append(ids) or {"deleted": 1, "hot_deleted": 1},
-    )
-
-    assert seen == [["clip_1"]]
-    text = response["result"]["content"][0]["text"]
-    assert '"hot_deleted": 1' in text
-
-
-def test_mcp_create_repair_proposal_tool(tmp_path):
-    from latticeshadow.mcp_server import handle_request
-
-    response = handle_request(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "latticeshadow.create_repair_proposal",
-                "arguments": {"summary": "Run tests", "command": "pytest -q", "risk": "low"},
-            },
-        },
-        lambda: None,
-        str(tmp_path / "shadow.sqlite"),
-        str(tmp_path),
-    )
-
-    text = response["result"]["content"][0]["text"]
-    assert '"status": "pending"' in text
-    assert (tmp_path / "repair_queue.jsonl").exists()
+    assert "latticeshadow.forget" not in names
 
 
 def test_summarizer_extracts_without_provider():

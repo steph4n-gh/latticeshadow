@@ -195,18 +195,25 @@ uses the DB's default `privacy=False`; choose and review your storage policy
 before adding sensitive data. See the [DB guide](../packages/db/README.md) for
 its API and optional research features.
 
-## Assistant access (experimental integration)
+## Assistant access (explicit grant)
 
-After you have saved an event, `shadow mcp serve` runs a local MCP server over
-stdio. A client must be configured separately to launch that command from the
-same installed environment. The server exposes redacted recall, recent context,
-summaries, privacy reports, repair proposals, and explicit deletion by ID.
-Redaction uses patterns and heuristics; it can miss secrets. Treat a connected
-assistant as a recipient of the data you permit it to read.
+After you have saved and assigned a note, make a local sharing grant for exactly
+the project and source you want an assistant to see:
 
-The protocol handler has automated tests, but a real assistant-client setup is
-still on the [improvement backlog](SPRINT.md). We do not yet give a copy-paste
-client configuration that we have not verified end to end.
+```sh
+shadow mcp grant create --project ops --source manual
+shadow mcp grant preview GRANT_ID
+shadow mcp serve --grant GRANT_ID
+```
+
+Replace `GRANT_ID` with the ID printed by create. The last command is a local
+stdio server for a separately configured MCP host; it does not start a network
+listener. Its tools are read-only recall, recent context, extractive summaries,
+and current citation resolution. No grant means no memory reads. Run
+`shadow mcp grant revoke GRANT_ID` to stop later requests. Redaction remains
+best effort, and already shared text cannot be recalled from an assistant.
+See the [MCP sharing guide](MCP.md) for host arguments, limits, and the
+independent client test. A real assistant-host walkthrough is still pending.
 
 ## If something goes wrong
 

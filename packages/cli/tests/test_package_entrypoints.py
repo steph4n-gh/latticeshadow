@@ -23,7 +23,10 @@ def test_installed_console_entrypoints_resolve():
     assert "timeline" in result.stdout
 
 
-def test_mcp_stdio_initialization_and_tool_discovery():
+def test_mcp_stdio_initialization_and_tool_discovery(tmp_path):
+    from latticeshadow.sharing import create_grant
+
+    grant = create_grant(tmp_path, projects=[None], sources=["manual"])
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2025-06-18", "capabilities": {},
@@ -33,7 +36,8 @@ def test_mcp_stdio_initialization_and_tool_discovery():
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
     ]
     result = subprocess.run(
-        [sys.executable, "-m", "latticeshadow.shadow_cli", "mcp", "serve"],
+        [sys.executable, "-m", "latticeshadow.shadow_cli", "mcp", "serve",
+         "--grant", grant["id"], "--vault-dir", str(tmp_path)],
         input="".join(json.dumps(request) + "\n" for request in requests),
         capture_output=True, text=True, timeout=15,
     )
@@ -42,11 +46,15 @@ def test_mcp_stdio_initialization_and_tool_discovery():
     assert [response["id"] for response in responses] == [1, 2]
     assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
     names = {tool["name"] for tool in responses[1]["result"]["tools"]}
-    assert {"latticeshadow.recall", "latticeshadow.current_context", "latticeshadow.forget"} <= names
+    assert {"latticeshadow.recall", "latticeshadow.current_context", "latticeshadow.resolve"} <= names
+    assert "latticeshadow.forget" not in names
 
 
-def test_mcp_transport_recovers_after_bad_input_and_keeps_stdout_clean(capsys):
+def test_mcp_transport_recovers_after_bad_input_and_keeps_stdout_clean(capsys, tmp_path):
     from latticeshadow.mcp_server import serve
+    from latticeshadow.sharing import create_grant
+
+    grant = create_grant(tmp_path, projects=[None], sources=["manual"])
 
     def unavailable_vault():
         print("vault diagnostic")
@@ -60,11 +68,12 @@ def test_mcp_transport_recovers_after_bad_input_and_keeps_stdout_clean(capsys):
         }},
     ]) + "\n"
     output = io.StringIO()
-    serve(unavailable_vault, "unused.sqlite", "unused", stdin=io.StringIO(requests), stdout=output)
+    serve(unavailable_vault, "unused.sqlite", str(tmp_path),
+          stdin=io.StringIO(requests), stdout=output, grant_id=grant["id"])
     responses = [json.loads(line) for line in output.getvalue().splitlines()]
     assert len(responses) == 4
     assert responses[0]["error"]["code"] == -32700
     assert responses[1]["error"]["code"] == -32600
     assert responses[2] == {"jsonrpc": "2.0", "id": 1, "result": {}}
-    assert responses[3]["error"]["message"] == "Test vault unavailable"
+    assert responses[3]["error"]["message"] == "Internal error"
     assert "vault diagnostic" in capsys.readouterr().err

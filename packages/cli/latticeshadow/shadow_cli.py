@@ -747,7 +747,7 @@ def do_status():
             import sqlite3
             conn = sqlite3.connect(db_path, timeout=5.0)
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM vectors")
+            cursor.execute("SELECT COUNT(*) FROM vectors WHERE collection = 'clipboard'")
             count = cursor.fetchone()[0]
             conn.close()
             print(f"Entries:  {count}")
@@ -755,6 +755,12 @@ def do_status():
             print("Entries:  (database locked, uninitialized, or shredded)")
     else:
         print("Database: Not initialized yet.")
+
+    days = config.get("retention.days") or 0
+    print(f"Retention: {days} day(s)" if days else "Retention: Off")
+    sources = config.get("inputs.excluded_sources") or []
+    literals = config.get("inputs.excluded_literals") or []
+    print(f"Exclusions: {len(sources)} source(s), {len(literals)} literal rule(s)")
 
     # Log file
     log_path = os.path.join(get_log_dir(), "shadowd.log")

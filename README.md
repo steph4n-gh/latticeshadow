@@ -8,8 +8,8 @@ redacted view through a local MCP server. LatticeShadow combines a reusable
 SQLite vector store with a macOS client.
 
 This is a **development prototype**, not a finished clipboard app or a security
-product. The basic local workflow works; installation, capture, desktop UI, and
-the experimental features still need more real-world validation. The
+product. The daily-use alpha is being validated; the integrated code has tests,
+while its full desktop, guest-install, and long-run checks are still underway. The
 [capability guide](docs/CAPABILITIES.md) says exactly where the edges are.
 
 ## First run on macOS
@@ -42,12 +42,12 @@ the macOS client is not installed on Linux.
 
 | Area | Current state |
 | --- | --- |
-| Manual memory | `shadow remember`, timeline, search, summary, and explicit forget are implemented and tested with disposable data. Recall quality has a small labeled test set; broader evaluation is needed. |
-| Background capture | macOS clipboard and terminal capture start only after explicit source choices and `shadow enable`. Automated tests exist; broader desktop validation is still needed. |
-| Assistant access | `shadow mcp serve` implements a stdio MCP server with redacted recall and other tools. End-to-end use with a real MCP client is still on the backlog. |
+| Manual memory | `shadow remember`, scoped timeline and search, project assignment, and explicit forget are implemented and tested with disposable data. The integrated retrieval scorecard and full Mini performance run are still in progress. |
+| Background capture | macOS clipboard and terminal capture require explicit source choices and `shadow enable`. Pause persists; literal/source exclusions and optional age retention are implemented. Broader desktop and reboot validation is still in progress. |
+| Assistant access | Local project/source grants restrict a read-only stdio MCP server. An independent MCP SDK test passes; an assistant-host walkthrough is still being checked. See the [sharing guide](docs/MCP.md). |
 | Database | `latticeshadow-db` installs independently and supports document/vector storage, metadata, retrieval, and optional research indexes. |
-| Desktop and peer features | The menu-bar UI, cross-device sync, autonomous repair, and several retrieval modes are experimental. They are not the recommended first run. |
-| Distribution | GitHub releases contain source archives. There are no installable wheels or packaged native companion yet. |
+| Desktop and peer features | The menu-bar recall panel is implemented; logged-in guest interaction is still pending. Cross-device sync, autonomous repair, and several retrieval modes remain experimental. |
+| Distribution | Source releases are public. An unsigned standalone Apple Silicon app candidate has been built and tested in a stripped disposable guest; the integrated candidate, signing, and notarization are still pending. |
 
 See [Capabilities and limits](docs/CAPABILITIES.md) for the evidence and privacy
 boundaries behind this table. The commands above require no LLM account.
@@ -90,7 +90,9 @@ iCloud sync writes encrypted packets while the live vault and keys stay local.
 Older installations that stored their live vault in iCloud need the
 [migration steps](docs/GETTING_STARTED.md) before restarting with sync enabled.
 
-`shadow forget` removes selected events from the active local indexes. It is not
+`shadow forget` removes selected events from the active local indexes.
+`shadow backup export` makes a portable passphrase-encrypted snapshot, and restore goes
+to a separate destination so an existing vault stays usable. Deletion is not
 a promise to erase old backups, synced copies, or every trace from a filesystem.
 Treat this as prototype software when choosing what to save.
 
@@ -108,7 +110,8 @@ for concrete acceptance criteria.
 
 | If you want to… | Read… |
 | --- | --- |
-| Try the CLI or opt into capture | [Getting started](docs/GETTING_STARTED.md) |
+| Try the CLI, backups, or opt into capture | [Getting started](docs/GETTING_STARTED.md) |
+| Share a chosen slice with an assistant | [MCP sharing guide](docs/MCP.md) |
 | Check a feature's maturity or data boundary | [Capabilities and limits](docs/CAPABILITIES.md) |
 | Understand the packages and data flow | [Architecture](docs/ARCHITECTURE.md) |
 | Browse all guides and research notes | [Documentation index](docs/README.md) |

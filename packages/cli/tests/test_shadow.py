@@ -348,6 +348,26 @@ def test_backup_cli_restore_isolated_from_live_key(setup_test_env, monkeypatch, 
     assert destination.joinpath(".key").stat().st_mode & 0o077 == 0
 
 
+def test_mcp_grant_cli_requires_explicit_scope_and_revokes(setup_test_env, capsys):
+    cli = setup_test_env["shadow_cli"]
+    run_cli(cli, ["remember", "note", "synthetic deployment note", "--project", "ops",
+                  "--source", "manual"])
+    capsys.readouterr()
+    with pytest.raises(SystemExit, match="Choose at least one"):
+        run_cli(cli, ["mcp", "grant", "create", "--source", "manual"])
+    run_cli(cli, ["mcp", "grant", "create", "--project", "ops", "--source", "manual"])
+    grant = json.loads(capsys.readouterr().out)
+    grant_id = grant["id"]
+    run_cli(cli, ["mcp", "grant", "preview", grant_id])
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["count"] == 1
+    assert preview["events"][0]["project"] == "ops"
+    run_cli(cli, ["mcp", "grant", "revoke", grant_id])
+    assert "Revoked grant" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="Grant not found"):
+        run_cli(cli, ["mcp", "serve", "--grant", grant_id])
+
+
 def test_open_context_only_opens_supported_targets(setup_test_env, monkeypatch):
     cli = setup_test_env["shadow_cli"]
     monkeypatch.setattr(cli, "get_vault", lambda: object())
