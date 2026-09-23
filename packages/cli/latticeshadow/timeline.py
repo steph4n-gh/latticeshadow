@@ -346,6 +346,8 @@ def forget_events(vault: Any, ids: Iterable[str]) -> dict[str, Any]:
     remaining = {event["id"] for event in get_events(vault, chosen)}
     if remaining:
         errors.append("Canonical records remain after deletion")
+    if before - remaining:
+        clear_search_cache()
     return {"canonical_deleted": len(before - remaining),
             "derived_invalidated": not errors, "cleanup_errors": errors}
 
