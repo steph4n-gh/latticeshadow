@@ -69,6 +69,10 @@ DEFAULTS = {
         "idle_threshold_seconds": 300,
         "max_daily_llm_requests": 50,
     },
+    "experimental": {
+        "immune_scan": False,
+        "semantic_swapper": False,
+    },
     "consent": {
         "completed": False,
         "version": 1,

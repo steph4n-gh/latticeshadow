@@ -23,7 +23,9 @@ class ImmuneSystem(threading.Thread):
         self._stop_event.wait(30)
         while not self._stop_event.is_set():
             try:
-                self.run_vaccination_scan()
+                from latticeshadow import consent
+                if consent.surface_enabled("immune_scan"):
+                    self.run_vaccination_scan()
             except Exception as e:
                 print(f"ImmuneSystem scan error: {e}")
             

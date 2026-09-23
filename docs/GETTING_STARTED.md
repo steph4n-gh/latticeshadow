@@ -65,9 +65,10 @@ shadow enable
 shadow status
 ```
 
-Answer every wizard prompt deliberately. Its defaults reflect the current
-configuration; both capture sources are off in a fresh setup. You can make the
-two required choices without the full wizard. For example, to capture clipboard
+The wizard asks only about clipboard and terminal capture. Its defaults reflect
+the current configuration; both are off in a fresh setup. Other services remain
+off until you enable them individually with `shadow consent set`. You can make
+the two required choices without the wizard. For example, to capture clipboard
 text but leave shell history alone:
 
 ```sh
@@ -93,7 +94,15 @@ pending source. After updating the checkout, run `shadow install` again to
 refresh the local daemon code baseline, then `shadow enable`. Reinstalling
 stops the old daemon. Manual saves and searches do not require capture consent.
 
-Stop capture with:
+Pause capture without changing your source choices, including across a reboot:
+
+```sh
+shadow pause
+shadow status
+shadow resume
+```
+
+Stop the daemon with:
 
 ```sh
 shadow disable

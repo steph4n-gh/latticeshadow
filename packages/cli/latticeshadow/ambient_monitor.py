@@ -31,7 +31,9 @@ class AmbientContextMonitor(threading.Thread):
     def run(self):
         while not self._stop_event.is_set():
             try:
-                self.poll_and_save()
+                from latticeshadow import consent
+                if consent.surface_enabled("ambient_context"):
+                    self.poll_and_save()
             except Exception:
                 pass
             self._stop_event.wait(self.interval)
@@ -67,6 +69,10 @@ class AmbientContextMonitor(threading.Thread):
             content = self.query_vscode()
         
         if content:
+            # Consent or pause may have changed while AppleScript was running.
+            from latticeshadow import consent
+            if not consent.surface_enabled("ambient_context"):
+                return
             payload = {
                 "app": app_name,
                 "application": app_name,

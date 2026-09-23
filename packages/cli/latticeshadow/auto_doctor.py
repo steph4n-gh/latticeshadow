@@ -231,7 +231,8 @@ class AutoDoctorThread(threading.Thread):
     def run(self):
         logger.info("Auto-Doctor background monitor started.")
         while self.running:
-            enabled = config.get("automation.auto_doctor_enabled")
+            from latticeshadow import consent
+            enabled = consent.surface_enabled("auto_doctor")
             if enabled:
                 threshold = config.get("automation.idle_threshold_seconds") or 300
                 idle = get_system_idle_time()

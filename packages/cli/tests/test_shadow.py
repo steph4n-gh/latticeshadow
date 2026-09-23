@@ -560,6 +560,38 @@ def test_capture_status_uses_real_daemon_and_pause_state(setup_test_env, mock_su
     assert status["daemon_running"] is None
     assert status["state"] == "unavailable"
 
+
+def test_optional_services_require_recorded_consent(setup_test_env):
+    from latticeshadow import config, consent
+
+    for name in ("ambient_context", "mobile_api", "mesh_sync", "swarm_knowledge", "icloud_sync",
+                 "immune_scan", "semantic_swapper", "auto_doctor"):
+        key = consent.SURFACES[name]["config_key"]
+        config.set(key, "true")
+        assert consent.surface_enabled(name) is False
+        consent.set_consent(name, True)
+        assert consent.surface_enabled(name) is True
+
+    consent.set_paused(True)
+    assert consent.surface_enabled("ambient_context") is False
+    assert consent.surface_enabled("semantic_swapper") is False
+    assert consent.surface_enabled("immune_scan") is True
+
+
+def test_capture_wizard_prompts_only_for_sources(setup_test_env):
+    from latticeshadow import consent
+
+    prompts = []
+    answers = iter(("y", "n"))
+    consent.run_wizard(
+        input_fn=lambda prompt: (prompts.append(prompt), next(answers))[1],
+        output_fn=lambda _message: None,
+    )
+    assert len(prompts) == 2
+    assert consent.capture_enabled("clipboard") is True
+    assert consent.capture_enabled("terminal_history") is False
+    assert consent.surface_enabled("immune_scan") is False
+
 def test_cli_search_paste(setup_test_env, capsys, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     

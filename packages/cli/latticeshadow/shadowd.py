@@ -234,7 +234,7 @@ def handle_loop_and_speculative_fix(vault, logger, p2p_node=None):
                 except Exception as qe:
                     logger.warning("Failed to queue loop repair proposal: %s", qe)
                 
-                if p2p_node and config.get("sync.swarm_knowledge"):
+                if p2p_node and consent.surface_enabled("swarm_knowledge"):
                     logger.info("Swarm knowledge broadcast skipped: signed pairing is not configured.")
         except Exception as ge:
             logger.warning("Failed to generate speculative fix: %s", ge)
@@ -378,12 +378,14 @@ def run_daemon():
     ignored_lock = threading.Lock()
 
     def on_sync_received(content, sender_id):
+        if not consent.surface_enabled("mesh_sync"):
+            return
         content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
         with ignored_lock:
             ignored_hashes.add(content_hash)
         sync_queue.put((content, content_hash))
 
-    if config.get("sync.mesh_sync"):
+    if consent.surface_enabled("mesh_sync"):
         p2p_node = LocalMeshNode(node_id, vault)
         p2p_node.register_sync_callback(on_sync_received)
         p2p_node.start()
@@ -393,7 +395,7 @@ def run_daemon():
 
     # Start Mobile API Server
     mobile_server = None
-    if config.get("mobile.enabled"):
+    if consent.surface_enabled("mobile_api"):
         mobile_host = config.get("mobile.host") or "127.0.0.1"
         mobile_port = config.get("mobile.port") or 5052
         mobile_server = MobileAPIServer(vault, host=mobile_host, port=int(mobile_port))
@@ -496,7 +498,7 @@ def run_daemon():
 
     # Start Ambient Context Monitor if enabled in configuration
     ambient_monitor = None
-    if config.get("inputs.ambient_context"):
+    if consent.surface_enabled("ambient_context"):
         try:
             from latticeshadow.ambient_monitor import AmbientContextMonitor
             ambient_monitor = AmbientContextMonitor(interval=5.0, pot_chain=pot_chain, vault=vault)
@@ -505,19 +507,20 @@ def run_daemon():
         except Exception as ae:
             logger.error("Failed to initialize Ambient Context Monitor: %s", ae)
             
-    # Start Autonomous OS Immune System
+    # Experimental background services require an explicit choice.
     immune_system = None
-    try:
-        from latticeshadow.immune_system import ImmuneSystem
-        immune_system = ImmuneSystem(pot_chain=pot_chain)
-        immune_system.start()
-        logger.info("Autonomous OS Immune System (AOIS) active.")
-    except Exception as ie:
-        logger.error("Failed to start Immune System: %s", ie)
+    if consent.surface_enabled("immune_scan"):
+        try:
+            from latticeshadow.immune_system import ImmuneSystem
+            immune_system = ImmuneSystem(pot_chain=pot_chain)
+            immune_system.start()
+            logger.info("Experimental dependency scan active.")
+        except Exception as ie:
+            logger.error("Failed to start dependency scan: %s", ie)
 
     # Start Auto-Doctor
     auto_doctor = None
-    if "pytest" not in sys.modules:
+    if "pytest" not in sys.modules and consent.surface_enabled("auto_doctor"):
         try:
             from latticeshadow.auto_doctor import AutoDoctorThread
             auto_doctor = AutoDoctorThread()
@@ -528,13 +531,14 @@ def run_daemon():
 
     # Start Semantic Swapper Daemon
     swapper_daemon = None
-    try:
-        from latticeshadow.virtual_swapper import SemanticSwapperDaemon
-        swapper_daemon = SemanticSwapperDaemon(vault=vault, pot_chain=pot_chain)
-        swapper_daemon.start()
-        logger.info("Holographic Virtual Swapper active.")
-    except Exception as sde:
-        logger.error("Failed to start Semantic Swapper Daemon: %s", sde)
+    if consent.surface_enabled("semantic_swapper"):
+        try:
+            from latticeshadow.virtual_swapper import SemanticSwapperDaemon
+            swapper_daemon = SemanticSwapperDaemon(vault=vault, pot_chain=pot_chain)
+            swapper_daemon.start()
+            logger.info("Experimental app snapshotting active.")
+        except Exception as sde:
+            logger.error("Failed to start app snapshotting: %s", sde)
 
     # Setup history watcher if configured
     history_watcher = None
@@ -572,6 +576,12 @@ def run_daemon():
 
     while _running:
         try:
+            if p2p_node and not consent.surface_enabled("mesh_sync"):
+                p2p_node.stop()
+                p2p_node = None
+            if mobile_server and not consent.surface_enabled("mobile_api"):
+                mobile_server.stop()
+                mobile_server = None
             # Check if master key has been destroyed (crypto-shred deletes both Keychain and file)
             key_available = os.path.exists(get_key_file())
             if not key_available:
@@ -654,7 +664,7 @@ def run_daemon():
                                         "Captured: %s (len: %d, total_new: %d)",
                                         doc_id, len(content), inserts_since_consolidation,
                                     )
-                                    if config.get("sync.mesh_sync") and p2p_node:
+                                    if consent.surface_enabled("mesh_sync") and p2p_node:
                                         p2p_node.broadcast_sync(content, doc_id)
 
                                     # Run Topological Loop Detection and speculative fix generation
@@ -762,7 +772,7 @@ def run_daemon():
                 pass
 
             # Periodically execute iCloud Sync if enabled
-            if config.get("sync.icloud_sync"):
+            if consent.surface_enabled("icloud_sync"):
                 current_time = time.time()
                 if current_time - last_sync_time >= SYNC_INTERVAL:
                     last_sync_time = current_time

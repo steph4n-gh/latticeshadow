@@ -34,6 +34,10 @@ class SemanticSwapperDaemon(threading.Thread):
         logger.info("SemanticSwapperDaemon starting...")
         while not self._stop_event.is_set():
             try:
+                from latticeshadow import consent
+                if not consent.surface_enabled("semantic_swapper"):
+                    self._stop_event.wait(5.0)
+                    continue
                 # 1. Check memory swap usage to scale the polling interval
                 swap_used_mb = self.get_swap_used_mb()
                 
@@ -189,6 +193,9 @@ end tell"""
         return self.run_applescript(script)
 
     def snapshot_app_to_vault(self, app_name):
+        from latticeshadow import consent
+        if not consent.surface_enabled("semantic_swapper"):
+            return
         if not self.vault:
             return
 
@@ -198,6 +205,8 @@ end tell"""
 
         text = content["text"].strip()
         if not text:
+            return
+        if not consent.surface_enabled("semantic_swapper"):
             return
 
         # Store in vault

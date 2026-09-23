@@ -48,6 +48,21 @@ SURFACES: dict[str, dict[str, Any]] = {
         "label": "Streaming exact hot index",
         "boundary": "Mirrors captures into an opt-in dense sidecar collection.",
     },
+    "immune_scan": {
+        "config_key": "experimental.immune_scan",
+        "label": "Experimental dependency scan",
+        "boundary": "Sends installed package names and versions to OSV for CVE lookup.",
+    },
+    "semantic_swapper": {
+        "config_key": "experimental.semantic_swapper",
+        "label": "Experimental app snapshotting",
+        "boundary": "Reads selected foreground app or document text into local memory.",
+    },
+    "auto_doctor": {
+        "config_key": "automation.auto_doctor_enabled",
+        "label": "Experimental auto-doctor",
+        "boundary": "May call the selected LLM and create candidate code changes in a sandbox.",
+    },
 }
 
 CAPTURE_SOURCES = ("clipboard", "terminal_history")
@@ -99,12 +114,19 @@ def pending_capture_sources() -> list[str]:
     return [name for name in CAPTURE_SOURCES if surfaces[name]["needs_consent"]]
 
 
+def surface_enabled(name: str) -> bool:
+    if name not in SURFACES:
+        raise ValueError(f"Unknown consent surface: {name}")
+    status = consent_status()
+    state = status["surfaces"][name]
+    paused_capture = name in (*CAPTURE_SOURCES, "ambient_context", "semantic_swapper")
+    return state["enabled"] and not state["needs_consent"] and not (paused_capture and status["paused"])
+
+
 def capture_enabled(name: str) -> bool:
     if name not in CAPTURE_SOURCES:
         raise ValueError(f"Unknown capture source: {name}")
-    status = consent_status()
-    state = status["surfaces"][name]
-    return state["enabled"] and not state["needs_consent"] and not status["paused"]
+    return surface_enabled(name)
 
 
 def set_paused(paused: bool) -> dict[str, Any]:
@@ -149,9 +171,10 @@ def run_wizard(
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    output_fn("LatticeShadow consent wizard")
-    output_fn("Each surface can be changed later with 'shadow consent set <surface> on|off'.")
-    for name, spec in SURFACES.items():
+    output_fn("LatticeShadow capture choices")
+    output_fn("Optional services can be enabled later with 'shadow consent set <surface> on|off'.")
+    for name in CAPTURE_SOURCES:
+        spec = SURFACES[name]
         default = "y" if bool(config.get(spec["config_key"])) else "n"
         answer = input_fn(f"{spec['label']}? {spec['boundary']} [{default}/{'n' if default == 'y' else 'y'}]: ")
         answer = answer.strip().lower() or default
