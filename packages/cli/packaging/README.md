@@ -187,7 +187,9 @@ events at p95 300.57 ms; the cold first call took 5.36 s. See the
 for the workload and limits.
 
 The exact app also passed a [logged-in packaged Recall journey](../../../docs/validation/desktop-gui.md)
-with synthetic data. Interactive Keychain approval, successful legacy 0.1.0
-vault decryption, cross-app shortcut behavior, stock Gatekeeper first launch,
-Developer ID signing, and notarization remain open checks before a public
-binary release.
+and [explicit daemon, reboot, and removal checks](../../../docs/validation/legacy-upgrade-and-lifecycle-2026-09-23.md)
+with synthetic data. A populated 0.1.0 upgrade remained unreadable even after
+one-time Keychain approval; reinstalling the ad-hoc 0.1.0 bundle also failed.
+The 0.2.0 app preserved the key and vault on failure. Successful legacy upgrade,
+cross-app shortcut behavior, stock Gatekeeper first launch, Developer ID signing,
+and notarization remain open checks before a public binary release.

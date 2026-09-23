@@ -3,10 +3,13 @@
 Measured local runs: [retrieval relevance](recall-local.md),
 [15-minute driver smoke](local-smoke-2026-09-23.md), and
 [10,000-event local precheck](local-performance-2026-09-23.md). The
-[packaged macOS app report](packaged-app-2026-09-23.md) records the exact
-installed alpha archive and its remaining release gates. Each report
-states which candidate and gate it covers; the latter two are preparatory
-checks, not the final Mini or installed-app result.
+[final packaged query and recovery report](mini-b603-packaged-2026-09-23.md),
+[logged-in GUI journey](desktop-gui.md), and
+[daemon/reboot plus legacy-upgrade probe](legacy-upgrade-and-lifecycle-2026-09-23.md)
+record the exact final unsigned app candidate. The
+[earlier packaged-app report](packaged-app-2026-09-23.md) remains historical
+evidence. Each report states which candidate and gate it covers; the local
+prechecks are not the final Mini or installed-app result.
 
 These checks use disposable, authored data. They never read the default vault,
 clipboard, shell history, Keychain, or personal credentials. The JSON summary is
@@ -80,5 +83,7 @@ that the source remains readable. It does not prove that killing a process at
 every possible machine instruction is safe.
 
 Cross-surface desktop/MCP journeys, real artifact installation, stock-guest
-Gatekeeper behavior, and the 15-minute/2-hour elapsed runs need their own
-candidate reports. A passing script here does not mark those gates passed.
+Gatekeeper behavior, and elapsed soaks need their own candidate reports. The
+linked installed-app reports cover selected journeys; stock Gatekeeper and the
+full 2-hour candidate soak remain separate gates. A passing script here does
+not mark those gates passed.
