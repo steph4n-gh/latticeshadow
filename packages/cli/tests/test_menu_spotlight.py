@@ -10,8 +10,13 @@ import pytest
 from latticeshadow.desktop_recall import DesktopRecall
 from latticeshadow.menu import (
     ShadowMenuApp, _desktop_vault, _open_kind, _preview, _row_label, _scope,
-    _shortcut_matches,
+    _shortcut_matches, setup_spotlight,
 )
+
+
+@pytest.fixture(autouse=True)
+def no_personal_shortcut_config(monkeypatch):
+    monkeypatch.setattr("latticeshadow.menu.config.get", lambda key: None)
 
 
 def event(doc_id="note_1", text="remember this"):
@@ -233,3 +238,48 @@ def test_pause_control_uses_persistent_consent_state():
         app.pauseResume_(None)
     pause.assert_called_once_with(True)
     app.refreshStatus.assert_called_once()
+
+
+def test_native_panel_keeps_search_results_preview_and_actions_accessible():
+    import AppKit
+
+    class Delegate(AppKit.NSObject):
+        pass
+
+    AppKit.NSApplicationLoad()
+    delegate = Delegate.alloc().init()
+    panel = setup_spotlight(delegate)
+    try:
+        assert panel.appearance().name() == AppKit.NSAppearanceNameDarkAqua
+        assert delegate.search_field.accessibilityLabel() == "Search local memories"
+        assert delegate.table.accessibilityLabel() == "Recall results"
+        assert delegate.preview.accessibilityLabel() == "Selected event preview and provenance"
+        results = delegate.table.enclosingScrollView().frame()
+        preview = delegate.preview.enclosingScrollView().frame()
+        assert results.origin.x + results.size.width < preview.origin.x
+        titles = {view.title() for view in panel.contentView().subviews()
+                  if isinstance(view, AppKit.NSButton)}
+        assert {"Copy", "Open link/file", "Assign project", "Forget…"} <= titles
+        text = {view.stringValue() for view in panel.contentView().subviews()
+                if isinstance(view, AppKit.NSTextField) and not view.isEditable()}
+        assert "Small things stay with you." in text
+        assert "Return copies · Escape closes · Shortcut can be changed in the menu" in text
+    finally:
+        panel.close()
+
+
+def test_panel_result_count_uses_readable_singular_labels():
+    app = ShadowMenuApp.alloc().init()
+    app.panel = MagicMock()
+    app.panel.isVisible.return_value = True
+    app.data_source = MagicMock()
+    app.table = MagicMock()
+    app._show_selection = MagicMock()
+    app.result_field = MagicMock()
+    app.search_field = MagicMock()
+    app.search_field.stringValue.return_value = "widget"
+    app._show_results(1, [event()], None)
+    app.result_field.setStringValue_.assert_called_with("1 result")
+    app.search_field.stringValue.return_value = ""
+    app._show_results(2, [event()], None)
+    app.result_field.setStringValue_.assert_called_with("1 recent event")

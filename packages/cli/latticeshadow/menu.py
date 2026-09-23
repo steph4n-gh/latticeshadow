@@ -105,13 +105,32 @@ def _open_kind(target):
     return None
 
 
-def _label(text, frame):
+def _color(red, green, blue):
+    return AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+        red / 255, green / 255, blue / 255, 1)
+
+
+NAVY = _color(17, 31, 43)
+SLATE = _color(28, 47, 61)
+EDGE = _color(61, 84, 100)
+INK = _color(232, 239, 243)
+MUTED = _color(172, 190, 202)
+AMBER = _color(239, 187, 111)
+
+
+def _card(frame):
+    return CardView.alloc().initWithFrame_(frame)
+
+
+def _label(text, frame, *, color=INK, size=13, weight=AppKit.NSFontWeightRegular):
     field = AppKit.NSTextField.alloc().initWithFrame_(frame)
     field.setStringValue_(text)
     field.setEditable_(False)
     field.setSelectable_(False)
     field.setBezeled_(False)
     field.setDrawsBackground_(False)
+    field.setTextColor_(color)
+    field.setFont_(AppKit.NSFont.systemFontOfSize_weight_(size, weight))
     return field
 
 
@@ -120,7 +139,37 @@ def _button(title, action, target, frame):
     button.setTitle_(title)
     button.setTarget_(target)
     button.setAction_(action)
+    button.setFont_(AppKit.NSFont.systemFontOfSize_(13))
     return button
+
+
+class LatticeMark(AppKit.NSView):
+    """A small, decorative mark; the actual controls remain native AppKit."""
+
+    def drawRect_(self, dirty_rect):
+        points = ((5, 6), (19, 6), (5, 20), (19, 20), (12, 34))
+        AMBER.setStroke()
+        for left, right in ((0, 1), (0, 2), (1, 3), (2, 3), (2, 4), (3, 4)):
+            line = AppKit.NSBezierPath.bezierPath()
+            line.moveToPoint_(points[left])
+            line.lineToPoint_(points[right])
+            line.setLineWidth_(1.2)
+            line.stroke()
+        AMBER.setFill()
+        for x, y in points:
+            AppKit.NSBezierPath.bezierPathWithOvalInRect_(
+                AppKit.NSMakeRect(x - 2.2, y - 2.2, 4.4, 4.4)).fill()
+
+
+class CardView(AppKit.NSView):
+    def drawRect_(self, dirty_rect):
+        border = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            self.bounds(), 12, 12)
+        SLATE.setFill()
+        border.fill()
+        EDGE.setStroke()
+        border.setLineWidth_(1)
+        border.stroke()
 
 
 class ResultsDataSource(AppKit.NSObject):
@@ -292,6 +341,7 @@ class ShadowMenuApp(AppKit.NSObject):
             title += f" — {status['error']}"
         self.capture_item.setTitle_(title)
         self.status_field.setStringValue_(title)
+        self.status_field.setToolTip_(title)
         self.pause_item.setTitle_("Resume capture" if status.get("paused") else "Pause capture")
         self.panel_pause.setTitle_("Resume capture" if status.get("paused") else "Pause capture")
         self._paused = bool(status.get("paused"))
@@ -357,8 +407,12 @@ class ShadowMenuApp(AppKit.NSObject):
         if error:
             self.result_field.setStringValue_(f"Search error: {error}")
         elif events:
-            self.result_field.setStringValue_(f"{len(events)} results" if self.search_field.stringValue().strip()
-                                              else f"{len(events)} recent events")
+            count = len(events)
+            if self.search_field.stringValue().strip():
+                noun = "result" if count == 1 else "results"
+            else:
+                noun = "recent event" if count == 1 else "recent events"
+            self.result_field.setStringValue_(f"{count} {noun}")
             self.table.selectRowIndexes_byExtendingSelection_(
                 AppKit.NSIndexSet.indexSetWithIndex_(0), False)
             self._show_selection()
@@ -501,58 +555,86 @@ class ShadowMenuApp(AppKit.NSObject):
 
 
 def setup_spotlight(delegate):
-    rect = AppKit.NSMakeRect(0, 0, 760, 640)
+    rect = AppKit.NSMakeRect(0, 0, 900, 650)
     style = AppKit.NSWindowStyleMaskTitled | AppKit.NSWindowStyleMaskClosable
     panel = RecallPanel.alloc().initWithContentRect_styleMask_backing_defer_(
         rect, style, AppKit.NSBackingStoreBuffered, False)
     panel.setTitle_("LatticeShadow Recall")
+    panel.setAppearance_(AppKit.NSAppearance.appearanceNamed_(AppKit.NSAppearanceNameDarkAqua))
+    panel.setBackgroundColor_(NAVY)
     panel.setLevel_(AppKit.NSFloatingWindowLevel)
     panel.setDelegate_(delegate)
     content = panel.contentView()
 
-    status = _label("Capture status: checking…", AppKit.NSMakeRect(20, 602, 610, 22))
+    mark = LatticeMark.alloc().initWithFrame_(AppKit.NSMakeRect(24, 575, 38, 42))
+    mark.setAccessibilityElement_(False)
+    content.addSubview_(mark)
+    content.addSubview_(_label("LatticeShadow", AppKit.NSMakeRect(68, 597, 320, 34),
+                               size=25, weight=AppKit.NSFontWeightSemibold))
+    content.addSubview_(_label("Small things stay with you.",
+                               AppKit.NSMakeRect(69, 574, 330, 20), color=MUTED))
+    status = _label("Capture status: checking…", AppKit.NSMakeRect(490, 600, 280, 23),
+                    color=AMBER, size=12, weight=AppKit.NSFontWeightMedium)
     content.addSubview_(status)
-    pause = _button("Pause capture", "pauseResume:", delegate, AppKit.NSMakeRect(625, 598, 120, 28))
+    pause = _button("Pause capture", "pauseResume:", delegate,
+                    AppKit.NSMakeRect(770, 594, 108, 32))
+    pause.setAccessibilityLabel_("Pause or resume capture")
     content.addSubview_(pause)
-    search = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(20, 554, 720, 32))
+    search = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(24, 516, 852, 40))
     search.setPlaceholderString_("Search memories, or leave blank for recent events")
+    search.setAccessibilityLabel_("Search local memories")
+    search.setFont_(AppKit.NSFont.systemFontOfSize_(17))
     search.setDelegate_(delegate)
     content.addSubview_(search)
 
-    content.addSubview_(_label("Project", AppKit.NSMakeRect(20, 520, 55, 20)))
-    project = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(75, 516, 170, 25))
+    content.addSubview_(_label("Project", AppKit.NSMakeRect(24, 480, 57, 20), color=MUTED))
+    project = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(82, 477, 155, 26))
     project.setPlaceholderString_("All projects")
+    project.setAccessibilityLabel_("Filter by project")
     project.setDelegate_(delegate)
     content.addSubview_(project)
-    unassigned = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(255, 514, 125, 28))
+    unassigned = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(245, 476, 146, 28))
     unassigned.setButtonType_(AppKit.NSSwitchButton)
     unassigned.setTitle_("Unassigned only")
     unassigned.setTarget_(delegate)
     unassigned.setAction_("filterChanged:")
     content.addSubview_(unassigned)
-    content.addSubview_(_label("Source", AppKit.NSMakeRect(390, 520, 55, 20)))
-    source = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(450, 516, 135, 25))
+    content.addSubview_(_label("Source", AppKit.NSMakeRect(410, 480, 55, 20), color=MUTED))
+    source = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(464, 477, 155, 26))
     source.setPlaceholderString_("All sources")
+    source.setAccessibilityLabel_("Filter by source")
     source.setDelegate_(delegate)
     content.addSubview_(source)
+    content.addSubview_(_label("When", AppKit.NSMakeRect(635, 480, 48, 20), color=MUTED))
     period = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
-        AppKit.NSMakeRect(600, 516, 140, 25), False)
+        AppKit.NSMakeRect(682, 477, 194, 26), False)
     for title in ("Any time", "Today", "Last 7 days", "Last 30 days"):
         period.addItemWithTitle_(title)
+    period.setAccessibilityLabel_("Filter by time")
     period.setTarget_(delegate)
     period.setAction_("filterChanged:")
     content.addSubview_(period)
 
-    result = _label("Recent events", AppKit.NSMakeRect(20, 483, 720, 22))
+    result = _label("Recent events", AppKit.NSMakeRect(30, 435, 395, 22),
+                    color=AMBER, size=14, weight=AppKit.NSFontWeightMedium)
     content.addSubview_(result)
-    scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(20, 263, 720, 215))
+    content.addSubview_(_label("Preview and provenance", AppKit.NSMakeRect(466, 435, 390, 22),
+                               color=AMBER, size=14, weight=AppKit.NSFontWeightMedium))
+    content.addSubview_(_card(AppKit.NSMakeRect(20, 80, 420, 345)))
+    content.addSubview_(_card(AppKit.NSMakeRect(454, 80, 426, 345)))
+
+    scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(30, 100, 400, 312))
     scroll.setHasVerticalScroller_(True)
-    table = AppKit.NSTableView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 720, 215))
+    scroll.setBorderType_(AppKit.NSNoBorder)
+    scroll.setBackgroundColor_(SLATE)
+    table = AppKit.NSTableView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 400, 312))
     column = AppKit.NSTableColumn.alloc().initWithIdentifier_("event")
-    column.setWidth_(700)
+    column.setWidth_(380)
     table.addTableColumn_(column)
     table.setHeaderView_(None)
-    table.setRowHeight_(27)
+    table.setRowHeight_(34)
+    table.setBackgroundColor_(SLATE)
+    table.setAccessibilityLabel_("Recall results")
     data_source = ResultsDataSource.alloc().init()
     table.setDataSource_(data_source)
     table.setDelegate_(delegate)
@@ -561,21 +643,39 @@ def setup_spotlight(delegate):
     scroll.setDocumentView_(table)
     content.addSubview_(scroll)
 
-    content.addSubview_(_label("Preview and provenance", AppKit.NSMakeRect(20, 236, 300, 22)))
-    preview_scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(20, 72, 720, 160))
+    preview_scroll = AppKit.NSScrollView.alloc().initWithFrame_(
+        AppKit.NSMakeRect(466, 149, 402, 262))
     preview_scroll.setHasVerticalScroller_(True)
-    preview = AppKit.NSTextView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 720, 160))
+    preview_scroll.setBorderType_(AppKit.NSNoBorder)
+    preview_scroll.setBackgroundColor_(SLATE)
+    preview = AppKit.NSTextView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 402, 262))
     preview.setEditable_(False)
     preview.setSelectable_(True)
+    preview.setDrawsBackground_(True)
+    preview.setBackgroundColor_(SLATE)
+    preview.setTextColor_(INK)
+    preview.setFont_(AppKit.NSFont.systemFontOfSize_(14))
+    preview.setAccessibilityLabel_("Selected event preview and provenance")
     preview_scroll.setDocumentView_(preview)
     content.addSubview_(preview_scroll)
-    for title, action, x in (("Copy", "copySelected:", 20),
-                             ("Open link/file", "openSelected:", 130),
-                             ("Assign project", "assignSelected:", 280),
-                             ("Forget…", "forgetSelected:", 440)):
-        content.addSubview_(_button(title, action, delegate, AppKit.NSMakeRect(x, 26, 135, 32)))
-    content.addSubview_(_label("Return copies · Escape closes · Option–Space opens by default",
-                                AppKit.NSMakeRect(20, 4, 680, 20)))
+    for title, action, x, width in (("Copy", "copySelected:", 466, 88),
+                                    ("Open link/file", "openSelected:", 558, 105),
+                                    ("Assign project", "assignSelected:", 667, 110),
+                                    ("Forget…", "forgetSelected:", 781, 87)):
+        button = _button(title, action, delegate, AppKit.NSMakeRect(x, 99, width, 34))
+        if title == "Copy":
+            button.setBezelColor_(AMBER)
+            button.setAttributedTitle_(AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                title, {AppKit.NSForegroundColorAttributeName: NAVY,
+                        AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(13)}))
+        elif title == "Forget…":
+            button.setBezelColor_(_color(115, 52, 52))
+            button.setContentTintColor_(INK)
+        else:
+            button.setBezelColor_(_color(64, 86, 102))
+        content.addSubview_(button)
+    content.addSubview_(_label("Return copies · Escape closes · Shortcut can be changed in the menu",
+                                AppKit.NSMakeRect(24, 34, 830, 22), color=MUTED, size=12))
 
     delegate.panel = panel
     delegate.search_field = search
