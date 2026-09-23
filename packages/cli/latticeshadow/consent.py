@@ -106,6 +106,7 @@ def consent_status() -> dict[str, Any]:
         "version": int(consent_cfg.get("version", 1)),
         "paused": bool(cfg.get("inputs", {}).get("paused", False)),
         "terminal_history_epoch": int(cfg.get("inputs", {}).get("terminal_history_epoch", 0)),
+        "clipboard_epoch": int(cfg.get("inputs", {}).get("clipboard_epoch", 0)),
         "surfaces": surfaces,
     }
 
@@ -138,6 +139,14 @@ def terminal_history_state() -> tuple[bool, int]:
             status["terminal_history_epoch"])
 
 
+def clipboard_state() -> tuple[bool, int]:
+    """Return the live choice and persisted transitions, even between polls."""
+    status = consent_status()
+    choice = status["surfaces"]["clipboard"]
+    return (choice["enabled"] and not choice["needs_consent"] and not status["paused"],
+            status["clipboard_epoch"])
+
+
 def set_paused(paused: bool) -> dict[str, Any]:
     """Persist the capture pause without changing source choices or consent."""
     if not isinstance(paused, bool):
@@ -154,6 +163,8 @@ def set_paused(paused: bool) -> dict[str, Any]:
         cfg.setdefault("inputs", {})["paused"] = paused
         cfg["inputs"]["terminal_history_epoch"] = int(
             cfg["inputs"].get("terminal_history_epoch", 0)) + 1
+        cfg["inputs"]["clipboard_epoch"] = int(
+            cfg["inputs"].get("clipboard_epoch", 0)) + 1
         config.save_config(cfg)
     return consent_status()
 
@@ -172,6 +183,9 @@ def set_consent(surface: str, enabled: bool) -> dict[str, Any]:
         if surface == "terminal_history":
             inputs = cfg.setdefault("inputs", {})
             inputs["terminal_history_epoch"] = int(inputs.get("terminal_history_epoch", 0)) + 1
+        if surface == "clipboard":
+            inputs = cfg.setdefault("inputs", {})
+            inputs["clipboard_epoch"] = int(inputs.get("clipboard_epoch", 0)) + 1
         config.save_config(cfg)
     return consent_status()
 

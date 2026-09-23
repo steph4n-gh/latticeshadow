@@ -1015,23 +1015,57 @@ def test_legacy_key_remains_usable_when_wrapping_is_unavailable(
 
 
 def test_clipboard_change_requires_post_consent_copy(setup_test_env):
+    from latticeshadow import consent
+
     gate = setup_test_env["shadowd"]._new_consented_clipboard_change
     pasteboard = MockPasteboard()
     pasteboard.set_content("copied before enabling")
+    consent.set_consent("clipboard", True)
+    consent.set_consent("terminal_history", False)
+    enabled, epoch = consent.clipboard_state()
+    assert enabled
     initial_count = pasteboard.changeCount()
     # Existing clipboard content when capture starts is only a baseline.
-    assert gate(initial_count, True, None, False) == (False, initial_count, True)
-    changed, count, enabled = gate(pasteboard.changeCount(), True, initial_count, True)
+    assert gate(initial_count, enabled, epoch, None, False, None) == (
+        False, initial_count, True, epoch)
+    changed, count, was_enabled, last_epoch = gate(
+        pasteboard.changeCount(), enabled, epoch, initial_count, True, epoch)
     assert not changed
     pasteboard.set_content("copied after enabling")
-    assert gate(pasteboard.changeCount(), True, count, enabled) == (True, 2, True)
-    # A copy made while paused must not appear when capture resumes.
-    assert gate(3, False, 2, True) == (False, 3, False)
-    assert gate(3, True, 3, False) == (False, 3, True)
-    assert gate(4, True, 3, True) == (True, 4, True)
+    assert gate(pasteboard.changeCount(), enabled, epoch, count, was_enabled, last_epoch) == (
+        True, 2, True, epoch)
+    # Pause, copy, and resume can all happen between daemon polls.
+    consent.set_paused(True)
+    pasteboard.set_content("copied while paused")
+    consent.set_paused(False)
+    enabled, resumed_epoch = consent.clipboard_state()
+    assert resumed_epoch != epoch
+    assert gate(pasteboard.changeCount(), enabled, resumed_epoch, 2, True, epoch) == (
+        False, 3, True, resumed_epoch)
+    pasteboard.set_content("copied after resuming")
+    assert gate(pasteboard.changeCount(), enabled, resumed_epoch, 3, True, resumed_epoch) == (
+        True, 4, True, resumed_epoch)
+    # Off, copy, and on between polls has the same safe re-baseline.
+    consent.set_consent("clipboard", False)
+    pasteboard.set_content("copied while off")
+    consent.set_consent("clipboard", True)
+    enabled, restored_epoch = consent.clipboard_state()
+    assert gate(pasteboard.changeCount(), enabled, restored_epoch, 4, True, resumed_epoch) == (
+        False, 5, True, restored_epoch)
     # Failed pasteboard reads also require a fresh baseline.
-    assert gate(None, True, 4, True) == (False, 4, False)
-    assert gate(5, True, 4, False) == (False, 5, True)
+    assert gate(None, enabled, restored_epoch, 5, True, restored_epoch) == (
+        False, 5, False, restored_epoch)
+    assert gate(6, enabled, restored_epoch, 5, False, restored_epoch) == (
+        False, 6, True, restored_epoch)
+
+
+def test_clipboard_baseline_rejects_consent_change_during_sample(setup_test_env, monkeypatch):
+    daemon = setup_test_env["shadowd"]
+    pasteboard = MockPasteboard()
+    pasteboard.set_content("pre-consent copy")
+    states = iter(((False, 1), (True, 2)))
+    monkeypatch.setattr(daemon.consent, "clipboard_state", lambda: next(states))
+    assert daemon._clipboard_baseline(pasteboard) == (1, False, 2)
 
 def test_cli_remove(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]

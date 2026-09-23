@@ -63,15 +63,23 @@ def _clipboard_change_count(pasteboard):
         return None
 
 
-def _new_consented_clipboard_change(current_count, enabled, last_count, was_enabled):
-    """Read changes only after a count baseline exists inside the current consent period."""
+def _clipboard_baseline(pasteboard):
+    before_enabled, before_epoch = consent.clipboard_state()
+    count = _clipboard_change_count(pasteboard)
+    enabled, epoch = consent.clipboard_state()
+    return count, bool(before_enabled and enabled and before_epoch == epoch and count is not None), epoch
+
+
+def _new_consented_clipboard_change(
+        current_count, enabled, epoch, last_count, was_enabled, last_epoch):
+    """Read changes only after a count baseline inside the current consent epoch."""
     if not enabled:
-        return False, current_count if current_count is not None else last_count, False
+        return False, current_count if current_count is not None else last_count, False, epoch
     if current_count is None:
-        return False, last_count, False
-    if not was_enabled or last_count is None:
-        return False, current_count, True
-    return current_count != last_count, current_count, True
+        return False, last_count, False, epoch
+    if not was_enabled or last_count is None or epoch != last_epoch:
+        return False, current_count, True, epoch
+    return current_count != last_count, current_count, True, epoch
 
 # Pasteboard types that signal "do not record" (password managers, transient copies)
 CONCEALED_TYPES = [
@@ -440,8 +448,7 @@ def run_daemon():
             logger.warning("Integrity check skipped: %s", e)
 
     pasteboard = AppKit.NSPasteboard.generalPasteboard()
-    initial_change_count = _clipboard_change_count(pasteboard)
-    initially_enabled = consent.capture_enabled("clipboard") and initial_change_count is not None
+    initial_change_count, initially_enabled, initial_epoch = _clipboard_baseline(pasteboard)
     startup_events: list[str] = []
     startup_lock = threading.Lock()
     startup_stop = threading.Event()
@@ -449,12 +456,13 @@ def run_daemon():
     def watch_startup_clipboard():
         last_startup_count = initial_change_count
         was_enabled = initially_enabled
+        last_epoch = initial_epoch
         while not startup_stop.is_set() and _running:
             try:
                 current_count = _clipboard_change_count(pasteboard)
-                changed, last_startup_count, was_enabled = _new_consented_clipboard_change(
-                    current_count, consent.capture_enabled("clipboard"),
-                    last_startup_count, was_enabled,
+                enabled, epoch = consent.clipboard_state()
+                changed, last_startup_count, was_enabled, last_epoch = _new_consented_clipboard_change(
+                    current_count, enabled, epoch, last_startup_count, was_enabled, last_epoch,
                 )
                 if changed:
                     if pasteboard.availableTypeFromArray_(CONCEALED_TYPES) is None:
@@ -683,8 +691,7 @@ def run_daemon():
     startup_thread.join(timeout=0.2)
     replay_startup_events()
 
-    last_change_count = _clipboard_change_count(pasteboard)
-    was_clipboard_enabled = consent.capture_enabled("clipboard") and last_change_count is not None
+    last_change_count, was_clipboard_enabled, last_clipboard_epoch = _clipboard_baseline(pasteboard)
 
     if consent.capture_enabled("clipboard"):
         logger.info("Listening for clipboard events...")
@@ -713,10 +720,10 @@ def run_daemon():
                 raise PermissionError("Master key destroyed (crypto-shred detected).")
 
             current_change_count = _clipboard_change_count(pasteboard)
-            clipboard_enabled = consent.capture_enabled("clipboard")
-            changed, last_change_count, was_clipboard_enabled = _new_consented_clipboard_change(
-                current_change_count, clipboard_enabled, last_change_count,
-                was_clipboard_enabled,
+            clipboard_enabled, clipboard_epoch = consent.clipboard_state()
+            changed, last_change_count, was_clipboard_enabled, last_clipboard_epoch = _new_consented_clipboard_change(
+                current_change_count, clipboard_enabled, clipboard_epoch,
+                last_change_count, was_clipboard_enabled, last_clipboard_epoch,
             )
             if changed:
 
