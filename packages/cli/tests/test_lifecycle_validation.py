@@ -19,8 +19,9 @@ def test_subprocess_lifecycle_report(tmp_path):
     assert completed.returncode == 0, completed.stderr[-2000:]
     result = json.loads(report.read_text(encoding="utf-8"))
     assert result["status"] == "passed"
-    assert result["detail"]["count"] >= 11
+    assert result["detail"]["count"] >= 12
     assert "concurrent-writers-visible-to-existing-reader" in result["detail"]["checks"]
     assert "interrupted-restore-leaves-source-readable" in result["detail"]["checks"]
+    assert "cli-grant-and-mcp-citation-forget-restart" in result["detail"]["checks"]
     assert str(tmp_path) not in report.read_text(encoding="utf-8")
     assert "synthetic portable backup passphrase" not in report.read_text(encoding="utf-8")

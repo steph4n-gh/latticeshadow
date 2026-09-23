@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import random
+import select
 import statistics
 import subprocess
 import sys
@@ -151,6 +152,100 @@ def _concurrent_writers(db: Path) -> None:
                 process.wait()
 
 
+def _mcp_journey(directory: Path) -> None:
+    """Exercise CLI grant commands and a real stdio server over one synthetic vault."""
+    _, _, add_event, _, forget_events, get_events, _, open_main_vault, _ = _imports()
+    destination = directory / "mcp-vault"
+    destination.mkdir(mode=0o700)
+    key = "a" * 64
+    key_file = destination / ".key"
+    key_file.write_text(key, encoding="ascii")
+    key_file.chmod(0o600)
+    db = destination / "shadow.sqlite"
+    vault = open_main_vault(str(db), key, device="cpu")
+    allowed = add_event(vault, "note", "deploy proxy after api_key=example-secret-value",
+                        source="manual", project="synthetic", doc_id="synthetic-citation")
+    excluded = add_event(vault, "note", "finance deploy proxy",
+                         source="manual", project="finance", doc_id="excluded-citation")
+    cli = [sys.executable, "-m", "latticeshadow.shadow_cli", "mcp"]
+    env = _env()
+    home = directory / "empty-home"
+    home.mkdir(mode=0o700)
+    env["HOME"] = str(home)
+    created = subprocess.run(
+        [*cli, "grant", "create", "--project", "synthetic", "--source", "manual",
+         "--limit", "5", "--vault-dir", str(destination)],
+        env=env, capture_output=True, text=True, timeout=120, check=True,
+    )
+    grant = json.loads(created.stdout)
+    preview = subprocess.run(
+        [*cli, "grant", "preview", grant["id"], "--vault-dir", str(destination)],
+        env=env, capture_output=True, text=True, timeout=120, check=True,
+    )
+    assert json.loads(preview.stdout)["count"] == 1
+
+    def start_server():
+        return subprocess.Popen(
+            [*cli, "serve", "--grant", grant["id"], "--vault-dir", str(destination)],
+            env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+
+    def ask(server, request_id: int, method: str, params: dict | None = None) -> dict:
+        assert server.stdin is not None and server.stdout is not None
+        server.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                       "method": method, "params": params or {}}) + "\n")
+        server.stdin.flush()
+        readable, _, _ = select.select([server.stdout], [], [], 30)
+        if not readable:
+            raise TimeoutError(f"MCP {method} did not reply")
+        line = server.stdout.readline()
+        if not line:
+            raise AssertionError(f"MCP {method} closed without a reply")
+        return json.loads(line)
+
+    def close(server):
+        assert server.stdin is not None
+        server.stdin.close()
+        try:
+            server.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=15)
+        if server.returncode:
+            assert server.stderr is not None
+            raise AssertionError(f"MCP server exited {server.returncode}: {server.stderr.read()[-1200:]}")
+
+    uri = "latticeshadow://event/synthetic-citation"
+    server = start_server()
+    try:
+        response = ask(server, 1, "initialize", {"protocolVersion": "2025-06-18",
+                        "capabilities": {}, "clientInfo": {"name": "lifecycle-validation", "version": "1"}})
+        assert response["result"]["protocolVersion"] == "2025-06-18"
+        recalled = ask(server, 2, "tools/call", {"name": "latticeshadow.recall",
+                       "arguments": {"query": "deploy proxy", "limit": 5}})
+        events = recalled["result"]["structuredContent"]["events"]
+        assert [event["id"] for event in events] == [allowed]
+        assert events[0]["citation"] == uri
+        assert events[0]["redacted"] is True
+        assert "example-secret-value" not in json.dumps(events)
+        assert excluded not in json.dumps(events)
+        resolved = ask(server, 3, "resources/read", {"uri": uri})
+        assert json.loads(resolved["result"]["contents"][0]["text"])["event"]["id"] == allowed
+        assert forget_events(vault, [allowed])["canonical_deleted"] == 1
+        assert not get_events(vault, [allowed])
+        after = ask(server, 4, "resources/read", {"uri": uri})
+        assert after["error"] == {"code": -32602, "message": "Event unavailable"}
+    finally:
+        close(server)
+    restarted = start_server()
+    try:
+        after_restart = ask(restarted, 5, "resources/read", {"uri": uri})
+        assert after_restart["error"] == {"code": -32602, "message": "Event unavailable"}
+    finally:
+        close(restarted)
+
+
 def lifecycle(directory: Path) -> dict:
     export_backup, restore_backup, add_event, fetch_events, forget_events, get_events, search_events, open_main_vault, vault_file_paths = _imports()
     db = directory / "lifecycle.sqlite"
@@ -275,6 +370,9 @@ def lifecycle(directory: Path) -> dict:
     assert reopened.count() == before and get_events(reopened, [kept])
     _assert_missing(reopened, "disk-fault")
     checks.append("synthetic-enospc-before-commit")
+
+    _mcp_journey(directory)
+    checks.append("cli-grant-and-mcp-citation-forget-restart")
 
     return {"checks": checks, "count": len(checks), "status": "passed"}
 

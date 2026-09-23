@@ -46,6 +46,11 @@ canonical commit but before the derived manifest, an exit after canonical
 delete but before that manifest, a missing vector sidecar, interruption during
 rebuild and restore, a wrong vault key, wrong passphrase, tampered archive,
 fresh-destination restore/reopen, and an injected `ENOSPC` error before commit.
+It also uses the installed CLI to create and preview a synthetic grant, starts
+an MCP stdio server, recalls and resolves a redacted citation, forgets the event,
+and confirms that citation is unavailable both immediately and after an MCP
+server restart. It does not automate the AppKit panel or constitute an
+independent MCP SDK/assistant-host check.
 It checks that a committed ID survives and a deleted ID remains unavailable
 after restart. The `ENOSPC` case is an injected store-boundary error, **not** a
 full-disk VM test. Process interruption leaves private staging files until
