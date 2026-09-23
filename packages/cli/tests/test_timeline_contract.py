@@ -113,7 +113,13 @@ else:
     assert search_events(reader, "separate process memory", scope={"sources": ["manual"]})[0]["id"] == doc_id
     subprocess.run([sys.executable, "-c", writer, path, "delete", doc_id],
                    env=environment, capture_output=True, text=True, check=True)
-    assert search_events(reader, "separate process memory", scope={"sources": ["manual"]}) == []
+    replacement = subprocess.run([sys.executable, "-c", writer, path, "add"],
+                                 env=environment, capture_output=True, text=True, check=True)
+    replacement_id = replacement.stdout.strip().splitlines()[-1]
+    assert replacement_id != doc_id
+    matches = search_events(reader, "separate process memory", scope={"sources": ["manual"]})
+    assert [event["id"] for event in matches] == [replacement_id]
+    assert get_events(reader, [doc_id]) == []
 
 
 def test_retention_uses_occurrence_time_and_literal_exclusions(vaults):
