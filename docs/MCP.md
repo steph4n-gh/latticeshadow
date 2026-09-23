@@ -111,6 +111,41 @@ in a disposable environment, then run
 The script creates only synthetic events and an isolated vault, launches the
 installed CLI server through the [SDK stdio client](https://py.sdk.modelcontextprotocol.io/client/transports/),
 then checks recall, scope, citation resolution, the prompt, and revocation in
-one session. The SDK is a validation dependency, not a product dependency. A
-real assistant host still needs its own walkthrough and sanitized transcript;
-a protocol client cannot prove that a host displays citations well.
+one session. The SDK is a validation dependency, not a product dependency.
+
+### Real host walkthrough
+
+Codex CLI can use the server through its [MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli):
+
+```toml
+[mcp_servers.latticeshadow]
+command = "/absolute/path/to/shadow"
+args = ["mcp", "serve", "--grant", "GRANT_ID"]
+```
+
+The read-only tools advertise MCP `readOnlyHint`. A host may still ask for
+approval. To let Codex call this specific locally granted server without a
+second prompt for each read, add `default_tools_approval_mode = "auto"` under
+that server's table. Review the grant first; the server enforces its allowlist
+regardless of the host's approval setting.
+
+On 2026-09-22, Codex CLI `0.155.0-alpha.9.2` with `gpt-6-sol` was run from an
+empty temporary working directory, read-only, against the integrated alpha
+commit `7b7ba5d`. Its temporary configuration contained only this MCP server,
+pointing at a disposable two-event hash-model vault and an `ops`/`manual`
+grant. Both host tool calls completed:
+
+```text
+latticeshadow.recall("widget queue")  -> one allowed synthetic note and citation
+latticeshadow.resolve(citation URI)    -> same live synthetic note
+Host answer: The fix was to restart the widget queue.
+             Citation: latticeshadow://event/<synthetic-id>
+```
+
+The second event was outside the grant. The host used no other tools. A link
+to the existing 0600 Codex authentication file was present inside a 0700
+temporary directory only for this isolated run;
+the temporary vault, configuration, and link were removed afterward. This
+demonstrates host retrieval and citation resolution for synthetic data. It does
+not test real user memory or establish that every assistant host renders
+citations identically.
