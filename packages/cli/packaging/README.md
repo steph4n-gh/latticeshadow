@@ -152,7 +152,7 @@ Developer ID signing, notarization,
 stock Gatekeeper behavior, interactive Keychain approval, and the final styled
 GUI journey remain outside this packaged regression check.
 
-## Current packaged validation candidate
+## Previous integrated packaged candidate
 
 The app rebuilt from source commit
 `b603442dfb471cf22f9a561f1b034a6582f830d9` produced a 425,567,521-byte
@@ -183,7 +183,7 @@ did not interfere with a later correct restore. The first `timeline --json`
 after activation remained valid JSON, with the key-migration notice on stderr.
 The same archive handled 100 warmed full MCP queries against 10,000 synthetic
 events at p95 300.57 ms; the cold first call took 5.36 s. See the
-[final package lab report](../../../docs/validation/mini-b603-packaged-2026-09-23.md)
+[preceding package lab report](../../../docs/validation/mini-b603-packaged-2026-09-23.md)
 for the workload and limits.
 
 The exact app also passed a [logged-in packaged Recall journey](../../../docs/validation/desktop-gui.md)
@@ -193,3 +193,27 @@ one-time Keychain approval; reinstalling the ad-hoc 0.1.0 bundle also failed.
 The 0.2.0 app preserved the key and vault on failure. Successful legacy upgrade,
 cross-app shortcut behavior, stock Gatekeeper first launch, Developer ID signing,
 and notarization remain open checks before a public binary release.
+
+## Current consent-aligned packaged candidate
+
+The app rebuilt from source commit
+`20669ff7e65fd3045e8c8f3151bdda5b07013047` produced a 425,565,640-byte
+ZIP with SHA-256
+`6f5e00f2ca44ab85956b47169adb2dd29475e81450ca3db2951f2c319e1a09d6`.
+The verifier passed the arm64 launcher, offline model/native smoke, ad-hoc
+signature, and 307 Mach-O dependency links. In stripped disposable guests,
+the bundled CLI displayed the full-vault shred warning and preserved a synthetic
+note after an aborted confirmation. Offline scoped JSON recall, a 10,000-event
+packaged MCP query (100 measured calls; warm p95 289.19 ms), and fresh-target
+restore of an earlier synthetic archive passed. See the
+[exact-candidate report](../../../docs/validation/packaged-app-20669ff-2026-09-23.md)
+for the workload, checksum, and limits.
+
+The current ZIP passed a [logged-in GUI smoke](../../../docs/validation/desktop-gui.md)
+for menu/Recall/search/project filter/preview/Copy and consent controls, plus
+an exact-ZIP [daemon/consent/reboot/removal journey](../../../docs/validation/packaged-app-20669ff-2026-09-23.md).
+The preceding `b603442` app has the fuller GUI Open/Assign/Forget evidence;
+that full journey belongs to its ZIP until repeated on this one.
+Populated 0.1.0 wrapped-key upgrade under a stable signing identity, stock
+Gatekeeper first launch, Developer ID signing, and notarization remain open
+before a public binary release.
