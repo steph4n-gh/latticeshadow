@@ -382,11 +382,11 @@ or content previously given to another application. Document this at the action.
 - Cache pinned dependencies/model by relevant lock/revision inputs; retain
   cancellation of superseded runs. Keep privileged secrets out of untrusted PR
   execution. Never make the personal Mini an unrestricted public-PR runner.
-- One integrated macOS candidate build/test workflow produces checksums, bundle
-  and reports tied to a commit SHA. Release checks must verify the intended trusted
-  workflow and that revision. Publish the tested artifact; do not silently rebuild
-  another binary after validation. Signing changes the artifact, so validate the
-  final signed candidate before publication.
+- CI builds and verifies the bundle, then retains a small report tied to its
+  commit SHA; it does not upload an unsigned app from a public PR. The private
+  lab archives and checksums the exact bundle used for guest tests. A later
+  binary release must verify its trusted workflow and revision, then validate
+  the final signed artifact before publication.
 
 ### E: evidence and the remote lab
 

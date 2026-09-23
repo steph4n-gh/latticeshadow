@@ -93,20 +93,11 @@ jobs:
       - name: Verify bundled app
         if: needs.database.outputs.run_bundle == 'true'
         run: python3 scripts/validation/verify_app.py dist/LatticeShadow.app > app-report.json
-      - name: Archive unsigned app candidate
-        if: needs.database.outputs.run_bundle == 'true'
-        run: ditto -c -k --sequesterRsrc --keepParent dist/LatticeShadow.app LatticeShadow-${{ github.sha }}-arm64.zip
-      - name: Record candidate checksum
-        if: needs.database.outputs.run_bundle == 'true'
-        run: shasum -a 256 LatticeShadow-${{ github.sha }}-arm64.zip > LatticeShadow-${{ github.sha }}-arm64.zip.sha256
       - uses: actions/upload-artifact@v4
         if: needs.database.outputs.run_bundle == 'true'
         with:
-          name: latticeshadow-unsigned-${{ github.sha }}
-          path: |
-            LatticeShadow-${{ github.sha }}-arm64.zip
-            LatticeShadow-${{ github.sha }}-arm64.zip.sha256
-            app-report.json
+          name: latticeshadow-bundle-report-${{ github.sha }}
+          path: app-report.json
           if-no-files-found: error
           retention-days: 14
 
