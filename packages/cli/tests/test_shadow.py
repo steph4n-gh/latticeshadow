@@ -1016,6 +1016,26 @@ def test_locked_keychain_still_reads_legacy_raw_file(
     assert key_file.read_text(encoding="ascii") == raw_key
 
 
+def test_key_migration_notice_does_not_break_json_stdout(
+        setup_test_env, monkeypatch, capsys):
+    from latticeshadow import security
+
+    raw_key = "a" * 64
+    key_file = setup_test_env["key_file"]
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text(raw_key, encoding="ascii")
+
+    def no_old_key(*_args):
+        raise PermissionError("no old wrapping key")
+
+    monkeypatch.setattr(security, "decrypt_with_secure_enclave", no_old_key)
+    monkeypatch.setattr(security, "encrypt_with_secure_enclave", lambda *_args: b"wrapped")
+    assert setup_test_env["shadow_cli"].get_or_create_master_key() == raw_key
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "Migrated flat-file legacy master key" in err
+
+
 def test_daemon_refuses_to_replace_inaccessible_existing_key(setup_test_env, monkeypatch):
     from latticeshadow import security
 

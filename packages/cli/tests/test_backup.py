@@ -1,5 +1,6 @@
 """Portable recovery succeeds without the source key and fails without mutation."""
 import sqlite3
+import sys
 
 import pytest
 
@@ -63,6 +64,24 @@ def test_wrong_passphrase_tamper_and_existing_destination_leave_source(source, t
         restore_backup(archive, destination, "long backup passphrase", "destination-key")
     assert not destination.exists()
     assert get_events(vault, [kept])[0]["text"] == "portable memory"
+
+
+def test_cli_wrong_passphrase_exits_cleanly_without_destination(
+        source, tmp_path, monkeypatch, capsys):
+    from latticeshadow import shadow_cli
+
+    vault, _, _, _ = source
+    archive = tmp_path / "portable.lsb"
+    export_backup(vault, archive, "long backup passphrase")
+    destination = tmp_path / "rejected"
+    monkeypatch.setattr(shadow_cli.getpass, "getpass", lambda *_: "wrong passphrase")
+    monkeypatch.setattr(sys, "argv", [
+        "shadow", "backup", "restore", str(archive), "--destination", str(destination),
+    ])
+    with pytest.raises(SystemExit, match="shadow: Backup authentication failed"):
+        shadow_cli.main()
+    assert capsys.readouterr().out == ""
+    assert not destination.exists()
 
 
 def test_unreadable_source_aborts_before_output(source, tmp_path):

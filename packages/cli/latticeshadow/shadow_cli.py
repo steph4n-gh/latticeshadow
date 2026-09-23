@@ -136,7 +136,8 @@ def get_or_create_master_key() -> str:
                         fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                         with os.fdopen(fd, "w") as f:
                             f.write(wrapped)
-                        print("\u2713 Migrated legacy master key to a Keychain keypair-wrapped key.")
+                        print("\u2713 Migrated legacy master key to a Keychain keypair-wrapped key.",
+                              file=sys.stderr)
                     except Exception:
                         # Migration is optional when the valid legacy key is already available.
                         pass
@@ -171,7 +172,8 @@ def get_or_create_master_key() -> str:
                         fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                         with os.fdopen(fd, "w") as f:
                             f.write(wrapped)
-                        print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
+                        print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.",
+                              file=sys.stderr)
                 except Exception:
                     # Keep using the intact legacy file if wrapping is unavailable.
                     pass
@@ -201,14 +203,15 @@ def get_or_create_master_key() -> str:
         
     try:
         keychain.store_key(wrapped_key)
-        print("\u2713 Stored master key in macOS Keychain.")
+        print("\u2713 Stored master key in macOS Keychain.", file=sys.stderr)
     except Exception:
         pass
         
     fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(wrapped_key)
-    print(f"\u2713 Generated master key at {key_file} (Keychain keypair wrapped: {keypair_wrapped})")
+    print(f"\u2713 Generated master key at {key_file} (Keychain keypair wrapped: {keypair_wrapped})",
+          file=sys.stderr)
     return raw_key
 
 
@@ -2622,7 +2625,10 @@ def main():
 
     handler = commands.get(args.command)
     if handler:
-        handler()
+        try:
+            handler()
+        except (ValueError, FileNotFoundError, FileExistsError, PermissionError) as exc:
+            raise SystemExit(f"shadow: {exc}") from None
     else:
         parser.print_help()
 
