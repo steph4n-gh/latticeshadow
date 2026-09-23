@@ -7,6 +7,9 @@ import plistlib
 import time
 import json
 import shlex
+import getpass
+import secrets
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from datetime import datetime
 
@@ -482,6 +485,83 @@ def do_rebuild_index(args):
     print(f"Rebuilt {count} stored vector(s).")
     if backup:
         print(f"Database backup (keep private): {backup}")
+
+
+def _backup_passphrase(args, *, confirm=False):
+    if args.passphrase_fd is not None:
+        if args.passphrase_fd < 0:
+            raise ValueError("Passphrase descriptor must be nonnegative")
+        with os.fdopen(os.dup(args.passphrase_fd), "r", encoding="utf-8") as stream:
+            value = stream.readline(4097).rstrip("\r\n")
+    else:
+        value = getpass.getpass("Backup passphrase: ")
+        if confirm and value != getpass.getpass("Repeat backup passphrase: "):
+            raise ValueError("Backup passphrases do not match")
+    if not 8 <= len(value) <= 4096:
+        raise ValueError("Backup passphrase must contain 8 to 4096 characters")
+    return value
+
+
+def _restored_vault(destination: Path):
+    key_file = destination / ".key"
+    db_file = destination / "shadow.sqlite"
+    if not db_file.is_file() or not key_file.is_file() or key_file.is_symlink():
+        raise ValueError("Destination must contain shadow.sqlite and a private .key")
+    if key_file.stat().st_mode & 0o077:
+        raise PermissionError("Restored key permissions must be 0600")
+    key = key_file.read_text(encoding="ascii").strip()
+    if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
+        raise ValueError("Restored destination key is invalid")
+    return open_main_vault(str(db_file), key, device=config.get_device())
+
+
+def do_backup(args):
+    """Export or inspect a portable recovery destination without changing live state."""
+    from latticeshadow.backup import export_backup, restore_backup
+
+    if args.backup_command == "export":
+        result = export_backup(get_vault(), args.archive, _backup_passphrase(args, confirm=True))
+        print(f"Encrypted backup created: {args.archive} ({result['records']} event(s)).")
+        return
+    destination = Path(args.destination).expanduser().absolute()
+    if args.backup_command == "inspect":
+        vault = _restored_vault(destination)
+        from latticeshadow.timeline import fetch_events
+        sample = fetch_events(vault, limit=3)["events"]
+        print(f"Restored vault verified: {vault.count()} event(s) at {destination}")
+        for event in sample:
+            print(f"  {event['id']}  {event['timestamp']}  {event['source']}")
+        print("Capture remains disabled for this recovery destination.")
+        return
+    if args.backup_command != "restore":
+        raise ValueError("Choose backup export, restore, or inspect")
+    if destination.exists():
+        raise FileExistsError(f"Restore destination already exists: {destination}")
+    passphrase = _backup_passphrase(args)
+    destination.mkdir(mode=0o700)
+    try:
+        key = secrets.token_hex(32)
+        result = restore_backup(args.archive, destination / "shadow.sqlite", passphrase, key)
+        fd = os.open(destination / ".key", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as stream:
+            stream.write(key + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        vault = _restored_vault(destination)
+        if vault.count() != result["records"]:
+            raise RuntimeError("Restored vault failed count verification")
+    except Exception:
+        for item in destination.iterdir():
+            if item.is_file():
+                item.unlink()
+        destination.rmdir()
+        raise
+    print(f"Restored and verified {result['records']} event(s) at {destination}.")
+    print("Capture, sharing, and synchronization remain disabled for this destination.")
+    print(f"Inspect again with: shadow backup inspect --destination {shlex.quote(str(destination))}")
+    print("To activate on a fresh macOS profile with no LatticeShadow vault or Keychain key,")
+    print("copy shadow.sqlite and .key into ~/.latticeshadow, then run shadow install,")
+    print("shadow consent wizard, and shadow enable. Do not replace an existing vault.")
 
 
 def _set_launch_agent_enabled(enabled: bool) -> None:
@@ -2365,6 +2445,17 @@ def main():
     subparsers.add_parser("install", help="Prepare the daemon without enabling capture or shell hooks")
     rebuild_p = subparsers.add_parser("rebuild-index", help="Re-embed saved events with the pinned local model")
     rebuild_p.add_argument("--yes", action="store_true", help="Skip the REBUILD prompt")
+    backup_p = subparsers.add_parser("backup", help="Export or restore a portable encrypted vault")
+    backup_sub = backup_p.add_subparsers(dest="backup_command", required=True)
+    backup_export = backup_sub.add_parser("export", help="Export the current canonical vault")
+    backup_export.add_argument("archive", help="New encrypted archive path")
+    backup_export.add_argument("--passphrase-fd", type=int, help="Read passphrase from an already-open descriptor")
+    backup_restore = backup_sub.add_parser("restore", help="Restore into a new private destination directory")
+    backup_restore.add_argument("archive", help="Encrypted archive path")
+    backup_restore.add_argument("--destination", required=True, help="New directory; no existing vault is replaced")
+    backup_restore.add_argument("--passphrase-fd", type=int, help="Read passphrase from an already-open descriptor")
+    backup_inspect = backup_sub.add_parser("inspect", help="Verify a restored destination without activating it")
+    backup_inspect.add_argument("--destination", required=True, help="Previously restored directory")
     shell_p = subparsers.add_parser("shell", help="Manage optional Zsh widgets")
     shell_sub = shell_p.add_subparsers(dest="shell_command", required=True)
     shell_sub.add_parser("enable")
@@ -2467,6 +2558,7 @@ def main():
         "shred": do_shred,
         "install": do_install,
         "rebuild-index": lambda: do_rebuild_index(args),
+        "backup": lambda: do_backup(args),
         "shell": lambda: do_shell(args),
         "enable": do_enable,
         "disable": do_disable,

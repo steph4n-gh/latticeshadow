@@ -302,6 +302,52 @@ def test_terminal_capture_uses_original_time_and_mirrors_provenance(setup_test_e
     assert mirror["text"] == event["text"]
 
 
+def test_capture_exclusions_and_retention_delete_canonical_and_hot(setup_test_env):
+    from latticeshadow import config
+    from latticeshadow.timeline import add_event, get_events
+    from latticeshadow.vaults import open_hot_vault, open_main_vault
+
+    cli = setup_test_env["shadow_cli"]
+    daemon = setup_test_env["shadowd"]
+    key = cli.get_or_create_master_key()
+    path = str(setup_test_env["db_path"])
+    main = open_main_vault(path, key)
+    hot = open_hot_vault(path, key)
+    config.set("inputs.excluded_sources", '["terminal"]')
+    config.set("inputs.excluded_literals", '["SECRET_MARKER"]')
+    assert daemon.store_captured_event(main, hot, "terminal", "safe text") is None
+    assert daemon.store_captured_event(main, hot, "clipboard", "secret_marker value") is None
+    assert main.count() == 0
+
+    old = add_event(main, "note", "old note", source="manual",
+                    timestamp="2026-09-01T00:00:00Z")
+    hot.add(documents=["old note"], ids=[old], metadatas=[{"source": "manual"}])
+    config.set("retention.days", "7")
+    result = daemon.apply_retention(main, hot, now=datetime(2026, 9, 22, tzinfo=timezone.utc))
+    assert result == {"canonical_deleted": 1, "cleanup_errors": []}
+    assert get_events(main, [old]) == []
+    assert get_events(hot, [old]) == []
+
+
+def test_backup_cli_restore_isolated_from_live_key(setup_test_env, monkeypatch, tmp_path, capsys):
+    from latticeshadow.timeline import add_event, get_events
+
+    cli = setup_test_env["shadow_cli"]
+    live = cli.get_vault(create_if_missing=True)
+    event_id = add_event(live, "note", "recover this", source="manual")
+    original_key = setup_test_env["key_file"].read_bytes()
+    archive = tmp_path / "portable.lsb"
+    destination = tmp_path / "recovered"
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _prompt: "long backup passphrase")
+    run_cli(cli, ["backup", "export", str(archive)])
+    run_cli(cli, ["backup", "restore", str(archive), "--destination", str(destination)])
+    run_cli(cli, ["backup", "inspect", "--destination", str(destination)])
+    assert "Restored vault verified: 1 event(s)" in capsys.readouterr().out
+    assert get_events(cli._restored_vault(destination), [event_id])[0]["text"] == "recover this"
+    assert setup_test_env["key_file"].read_bytes() == original_key
+    assert destination.joinpath(".key").stat().st_mode & 0o077 == 0
+
+
 def test_open_context_only_opens_supported_targets(setup_test_env, monkeypatch):
     cli = setup_test_env["shadow_cli"]
     monkeypatch.setattr(cli, "get_vault", lambda: object())

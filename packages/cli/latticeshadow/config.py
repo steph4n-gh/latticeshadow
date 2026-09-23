@@ -44,6 +44,11 @@ DEFAULTS = {
         "terminal_history": False,
         "ambient_context": False,
         "paused": False,
+        "excluded_sources": [],
+        "excluded_literals": [],
+    },
+    "retention": {
+        "days": 0,                  # zero disables automatic age-based deletion
     },
     "sync": {
         "icloud_sync": False,
@@ -234,7 +239,25 @@ def set(key: str, value: str) -> None:
     # Type coercion based on defaults
     final_key = parts[-1]
     default_val = _get_default(key)
-    if isinstance(default_val, bool):
+    if key in ("inputs.excluded_sources", "inputs.excluded_literals"):
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            raise ValueError(f"{key} must be a JSON array of strings") from exc
+        if (not isinstance(parsed, list) or len(parsed) > 100 or
+                any(not isinstance(item, str) or not item or
+                    len(item.encode("utf-8")) > 256 for item in parsed)):
+            raise ValueError(f"{key} must contain at most 100 nonempty strings, each at most 256 bytes")
+        current[final_key] = parsed
+    elif key == "retention.days":
+        try:
+            days = int(value)
+        except ValueError as exc:
+            raise ValueError("retention.days must be a nonnegative integer") from exc
+        if not 0 <= days <= 36500:
+            raise ValueError("retention.days must be between 0 and 36500")
+        current[final_key] = days
+    elif isinstance(default_val, bool):
         current[final_key] = value.lower() in ("true", "1", "yes")
     elif isinstance(default_val, int):
         try:

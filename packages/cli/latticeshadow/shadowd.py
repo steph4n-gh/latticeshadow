@@ -25,6 +25,7 @@ import socket
 import secrets
 import queue
 import threading
+from datetime import datetime, timedelta, timezone
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 from latticeshadow import config, consent
@@ -282,10 +283,23 @@ def mirror_to_hot_vault(hot_vault, document: str, doc_id: str, metadata: dict) -
         logger.warning("Hot index mirror failed for %s: %s", doc_id, e)
 
 
+def capture_allowed(event_type: str, text: str) -> bool:
+    from latticeshadow.timeline import should_capture
+
+    return should_capture(
+        text, event_type,
+        excluded_sources=config.get("inputs.excluded_sources") or (),
+        excluded_literals=config.get("inputs.excluded_literals") or (),
+    )
+
+
 def store_captured_event(vault, hot_vault, event_type: str, text: str, *,
-                         timestamp=None, metadata: dict | None = None) -> str:
+                         timestamp=None, metadata: dict | None = None) -> str | None:
     """Commit canonical capture first, then best-effort mirror its normalized form."""
     from latticeshadow.timeline import add_event, get_events
+
+    if not capture_allowed(event_type, text):
+        return None
 
     doc_id = add_event(
         vault, event_type, text, source=event_type,
@@ -299,6 +313,51 @@ def store_captured_event(vault, hot_vault, event_type: str, text: str, *,
         except Exception as exc:
             logger.warning("Hot index mirror pending repair for %s: %s", doc_id, exc)
     return doc_id
+
+
+def apply_retention(vault, hot_vault, *, now=None) -> dict:
+    """Delete aged events through the same canonical and hot forget paths."""
+    from latticeshadow.timeline import forget_events, iter_events
+    from latticeshadow.vaults import invalidate_holographic_indexes
+
+    days = config.get("retention.days") or 0
+    if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 36500:
+        raise ValueError("retention.days must be between 0 and 36500")
+    result = {"canonical_deleted": 0, "cleanup_errors": []}
+    if days == 0:
+        return result
+    boundary = ((now or datetime.now(timezone.utc)) - timedelta(days=days))
+    if boundary.tzinfo is None or boundary.utcoffset() is None:
+        raise ValueError("retention clock must include a timezone")
+    cutoff = boundary.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    batch = []
+
+    def remove_batch():
+        if not batch:
+            return
+        deleted = forget_events(vault, batch)
+        result["canonical_deleted"] += deleted["canonical_deleted"]
+        result["cleanup_errors"].extend(deleted["cleanup_errors"])
+        if hot_vault:
+            try:
+                hot = forget_events(hot_vault, batch)
+                result["cleanup_errors"].extend(hot["cleanup_errors"])
+            except Exception as exc:
+                result["cleanup_errors"].append(f"Hot index retention cleanup failed: {exc}")
+        batch.clear()
+
+    for event in iter_events(vault):
+        if event["timestamp"] < cutoff:
+            batch.append(event["id"])
+            if len(batch) == 500:
+                remove_batch()
+    remove_batch()
+    if result["canonical_deleted"]:
+        try:
+            invalidate_holographic_indexes(get_log_dir())
+        except OSError as exc:
+            result["cleanup_errors"].append(f"Derived memory cleanup failed: {exc}")
+    return result
 
 
 def run_daemon():
@@ -389,6 +448,15 @@ def run_daemon():
         except Exception as e:
             logger.warning("Hot index disabled: %s", e)
 
+    try:
+        retention = apply_retention(vault, hot_vault)
+        if retention["canonical_deleted"] or retention["cleanup_errors"]:
+            logger.info("Retention removed %d events; cleanup errors: %s",
+                        retention["canonical_deleted"], retention["cleanup_errors"])
+    except Exception as exc:
+        logger.error("Retention failed: %s", exc)
+    last_retention_run = time.monotonic()
+
     node_id = f"{socket.gethostname()}_{secrets.token_hex(4)}"
     p2p_node = None
 
@@ -465,7 +533,7 @@ def run_daemon():
                 content = startup_content.strip()
                 if MIN_CONTENT_CHARS < len(content) < MAX_CONTENT_BYTES:
                     content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
-                    if content_hash != last_content_hash:
+                    if content_hash != last_content_hash and capture_allowed("clipboard", content):
                         last_content_hash = content_hash
                         doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
                         if pot_chain:
@@ -635,7 +703,7 @@ def run_daemon():
                                 last_content_hash = content_hash
                                 logger.info("Feedback loop prevented for hash: %s", content_hash)
                             else:
-                                if content_hash != last_content_hash:
+                                if content_hash != last_content_hash and capture_allowed("clipboard", content):
                                     last_content_hash = content_hash
                                     doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
                                     if pot_chain:
@@ -710,6 +778,8 @@ def run_daemon():
                         for i, cmd in enumerate(new_cmds):
                             cmd_text = cmd["text"]
                             cmd_ts = cmd["timestamp"]
+                            if not capture_allowed("terminal", cmd_text):
+                                continue
                             doc_id = store_captured_event(
                                 vault, hot_vault, "terminal", cmd_text,
                                 timestamp=cmd_ts,
@@ -750,6 +820,16 @@ def run_daemon():
                 logger.info("Wrote sync event to General Pasteboard. Hash: %s", content_hash)
             except queue.Empty:
                 pass
+
+            if time.monotonic() - last_retention_run >= 3600:
+                last_retention_run = time.monotonic()
+                try:
+                    retention = apply_retention(vault, hot_vault)
+                    if retention["canonical_deleted"] or retention["cleanup_errors"]:
+                        logger.info("Retention removed %d events; cleanup errors: %s",
+                                    retention["canonical_deleted"], retention["cleanup_errors"])
+                except Exception as exc:
+                    logger.error("Retention failed: %s", exc)
 
             # Periodically execute iCloud Sync if enabled
             if consent.surface_enabled("icloud_sync"):
