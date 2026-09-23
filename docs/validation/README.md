@@ -10,7 +10,8 @@ From the repository root, after `make setup`:
 
 ```sh
 python packages/cli/scripts/validate_lifecycle.py lifecycle --report benchmark_results/lifecycle.json
-python packages/cli/scripts/validate_lifecycle.py performance --events 10000 --warmup 10 --queries 100 --report benchmark_results/performance.json
+python packages/cli/scripts/validate_lifecycle.py performance --events 10000 --warmup 10 --queries 100 --data-dir benchmark_results/performance-vault --report benchmark_results/performance.json
+python packages/cli/scripts/validate_lifecycle.py artifact-query --app /path/to/LatticeShadow.app --artifact /path/to/tested-candidate.zip --vault-dir benchmark_results/performance-vault --expected-events 10000 --warmup 10 --queries 100 --report benchmark_results/artifact-query.json
 python packages/cli/scripts/validate_lifecycle.py soak-smoke --data-dir /path/to/empty/disposable-dir --report benchmark_results/soak-smoke.json
 python packages/cli/scripts/validate_lifecycle.py soak-candidate --data-dir /path/to/empty/disposable-dir --report benchmark_results/soak-candidate.json
 ```
@@ -37,6 +38,16 @@ smoke; the product's 10,000-event target requires a quiet, exclusive reference
 machine and the complete parameters above. Do not compare a tiny fixture to the
 500 ms acceptance gate. `benchmark_results/` is ignored and should hold raw
 reports rather than Git commits.
+
+The retained `performance` vault has a private `.key` file and `shadow.sqlite`
+so `artifact-query` can open the same synthetic 10,000-event collection through
+the packaged app's `--cli mcp` launcher. Its sanitized process environment has
+no Python path, developer checkout, or real HOME. It creates an explicit grant,
+checks the eligible event count, then measures MCP startup, first query and warm
+total query latency. This includes grant checks, stdio transport and redaction;
+it is a separate artifact measurement from source-process ranking. The optional
+`--artifact` SHA-256 ties the report to the exact tested ZIP/DMG. Both modes
+should run on a quiet reference machine under the exclusive lab lease.
 
 ## Fault coverage
 

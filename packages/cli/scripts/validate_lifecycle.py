@@ -8,6 +8,7 @@ never remembered text, keys, or local paths.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import plistlib
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import deque
@@ -25,6 +27,7 @@ from collections import deque
 
 ROOT = Path(__file__).resolve().parents[3]
 KEY = "synthetic-lifecycle-key"
+PERFORMANCE_KEY = "a" * 64
 PASSPHRASE = "synthetic portable backup passphrase"
 STAMP = "2026-09-17T14:03:00Z"
 SYNTHETIC = (
@@ -393,6 +396,18 @@ def _resources() -> dict:
             "threads": process.num_threads(), "children": len(process.children())}
 
 
+def _process_tree_resources(pid: int) -> dict:
+    import psutil
+    process = psutil.Process(pid)
+    children = process.children(recursive=True)
+    processes = [process, *children]
+    return {"rss_mib": round(sum(item.memory_info().rss for item in processes) / 1048576, 1),
+            "fds": sum(item.num_fds() if hasattr(item, "num_fds") else item.num_handles()
+                       for item in processes),
+            "threads": sum(item.num_threads() for item in processes),
+            "children": len(children)}
+
+
 def _size_bytes(directory: Path) -> int:
     return sum(path.stat().st_size for path in directory.iterdir() if path.is_file())
 
@@ -404,12 +419,15 @@ def performance(directory: Path, *, count: int, warmup: int, queries: int) -> di
     from latticeshadow.vaults import EMBEDDING_MODEL, EMBEDDING_REVISION, embed_text
     from latticeshadow.timeline import _retrieval_cache, _utc
     from evaluation.scenarios import SCENARIOS
-    db = directory / "performance.sqlite"
+    db = directory / "shadow.sqlite"
+    key_file = directory / ".key"
+    key_file.write_text(PERFORMANCE_KEY, encoding="ascii")
+    key_file.chmod(0o600)
     t0 = time.perf_counter()
     embed_text("synthetic model initialization")
     model_seconds = time.perf_counter() - t0
     t0 = time.perf_counter()
-    vault = open_main_vault(str(db), KEY, device="cpu")
+    vault = open_main_vault(str(db), PERFORMANCE_KEY, device="cpu")
     vault_open_seconds = time.perf_counter() - t0
     now = _utc(datetime.now(timezone.utc))
     authored = [case.record for case in SCENARIOS]
@@ -461,6 +479,115 @@ def performance(directory: Path, *, count: int, warmup: int, queries: int) -> di
             "model_source": "bundled" if os.environ.get("LATTICESHADOW_BUNDLED_MODEL") else "hub_or_cache",
             "download_seconds": None,
             "note": "total query includes scope filtering, ephemeral ranking and canonical hydration; model initialization may include download when model_source is hub_or_cache, and download is not measured separately"}
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def artifact_query(vault_dir: Path, app: Path, *, artifact: Path | None,
+                   expected_events: int, warmup: int, queries: int) -> dict:
+    """Time installed-app MCP recall over a prebuilt synthetic encrypted vault."""
+    if app.suffix == ".app":
+        bundle = app
+        launcher = bundle / "Contents/MacOS/LatticeShadow"
+    else:
+        launcher = app
+        bundle = app.parents[2] if app.parent.name == "MacOS" else None
+    if not launcher.is_file() or not os.access(launcher, os.X_OK):
+        raise ValueError("--app must be an executable LatticeShadow launcher or .app bundle")
+    if not (vault_dir / "shadow.sqlite").is_file() or not (vault_dir / ".key").is_file():
+        raise ValueError("--vault-dir needs a synthetic shadow.sqlite and .key")
+    if (vault_dir / ".key").stat().st_mode & 0o077:
+        raise PermissionError("synthetic vault key must be mode 0600")
+    if artifact is not None and not artifact.is_file():
+        raise ValueError("--artifact must name the exact candidate archive")
+    home = vault_dir / "artifact-home"
+    home.mkdir(mode=0o700, exist_ok=True)
+    env = {"HOME": str(home), "TMPDIR": str(vault_dir),
+           "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"}
+    cli = [str(launcher), "--cli", "mcp"]
+    created = subprocess.run(
+        [*cli, "grant", "create", "--project", "synthetic", "--source", "manual",
+         "--limit", "5", "--vault-dir", str(vault_dir)],
+        env=env, capture_output=True, text=True, timeout=120, check=True,
+    )
+    grant = json.loads(created.stdout)
+    preview = subprocess.run(
+        [*cli, "grant", "preview", grant["id"], "--vault-dir", str(vault_dir)],
+        env=env, capture_output=True, text=True, timeout=120, check=True,
+    )
+    count = json.loads(preview.stdout)["count"]
+    if count != expected_events:
+        raise AssertionError(f"artifact grant preview saw {count} events; expected {expected_events}")
+    started = time.perf_counter()
+    server = subprocess.Popen(
+        [*cli, "serve", "--grant", grant["id"], "--vault-dir", str(vault_dir)],
+        env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+
+    def ask(request_id: int, method: str, params: dict) -> tuple[dict, float]:
+        assert server.stdin is not None and server.stdout is not None
+        request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        call_start = time.perf_counter()
+        server.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
+        server.stdin.flush()
+        readable, _, _ = select.select([server.stdout], [], [], 120)
+        if not readable:
+            raise TimeoutError(f"packaged MCP {method} did not reply")
+        line = server.stdout.readline()
+        if not line:
+            raise AssertionError(f"packaged MCP {method} closed without a reply")
+        return json.loads(line), (time.perf_counter() - call_start) * 1000
+
+    try:
+        initialized, _ = ask(1, "initialize", {"protocolVersion": "2025-06-18",
+                              "capabilities": {}, "clientInfo": {"name": "artifact-validation", "version": "1"}})
+        if initialized.get("result", {}).get("protocolVersion") != "2025-06-18":
+            raise AssertionError("packaged MCP did not negotiate the expected protocol")
+        startup_seconds = time.perf_counter() - started
+        from evaluation.scenarios import SCENARIOS
+        prompts = [question for case in SCENARIOS if case.answerable for question in case.questions]
+        measurements: list[float] = []
+        first_query_ms: float | None = None
+        for i in range(warmup + queries + 1):
+            response, elapsed_ms = ask(i + 2, "tools/call", {
+                "name": "latticeshadow.recall", "arguments": {"query": prompts[i % len(prompts)], "limit": 5}})
+            events = response.get("result", {}).get("structuredContent", {}).get("events")
+            if not isinstance(events, list) or not events:
+                raise AssertionError("packaged MCP recall did not return structured events")
+            if i == 0:
+                first_query_ms = elapsed_ms
+            elif i > warmup:
+                measurements.append(elapsed_ms)
+        resources = _process_tree_resources(server.pid)
+    finally:
+        if server.stdin is not None:
+            server.stdin.close()
+        try:
+            server.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=15)
+    if server.returncode:
+        assert server.stderr is not None
+        raise AssertionError(f"packaged MCP exited {server.returncode}: {server.stderr.read()[-1200:]}")
+    plist = bundle / "Contents/Info.plist" if bundle is not None else None
+    info = plistlib.loads(plist.read_bytes()) if plist is not None and plist.is_file() else {}
+    return {"events": count, "app_version": info.get("CFBundleShortVersionString"),
+            "app_executable_sha256": _sha256(launcher),
+            "artifact_sha256": _sha256(artifact) if artifact is not None else None,
+            "packaged_mcp_startup_seconds": round(startup_seconds, 2),
+            "packaged_first_query_seconds": round((first_query_ms or 0) / 1000, 2),
+            "packaged_warm_total_query": _samples(measurements),
+            "warmup_queries": warmup, "measured_queries": queries,
+            "resources": resources, "vault_disk_mib": round(_size_bytes(vault_dir) / 1048576, 1),
+            "note": "packaged total includes MCP stdio transport, grant checks, scoped production search, redaction and canonical hydration; this is separate from the source-process ranker timing"}
 
 
 def soak(directory: Path, *, seconds: int, interval: int, operation_interval: float,
@@ -561,6 +688,14 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--sample-interval", type=int, default=30)
             command.add_argument("--operation-interval", type=float, default=0.5)
             command.add_argument("--max-live-events", type=int, default=256)
+    packaged = commands.add_parser("artifact-query", help="measure the packaged app's scoped MCP search")
+    packaged.add_argument("--app", type=Path, required=True, help="tested .app bundle or its executable")
+    packaged.add_argument("--artifact", type=Path, help="exact ZIP/DMG candidate for SHA-256")
+    packaged.add_argument("--vault-dir", type=Path, required=True, help="existing synthetic performance vault")
+    packaged.add_argument("--expected-events", type=int, default=10_000)
+    packaged.add_argument("--warmup", type=int, default=10)
+    packaged.add_argument("--queries", type=int, default=100)
+    packaged.add_argument("--report", type=Path, help="write a sanitized JSON summary")
     worker = commands.add_parser("_worker", help=argparse.SUPPRESS)
     worker.add_argument("db", type=Path)
     worker.add_argument("action")
@@ -573,11 +708,15 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["LATTICESHADOW_EMBEDDING_MODEL"] = "hash"
     if args.profile == "performance" and (args.events < 1 or args.warmup < 0 or args.queries < 1):
         parser.error("performance requires positive events/queries and nonnegative warmup")
+    if args.profile == "artifact-query" and (args.expected_events < 1 or args.warmup < 0 or args.queries < 1):
+        parser.error("artifact query requires positive events/queries and nonnegative warmup")
     if args.profile.startswith("soak") and (args.seconds < 1 or args.sample_interval < 1 or
                                              args.operation_interval <= 0 or not 1 <= args.max_live_events <= 1000):
         parser.error("soak duration, intervals and 1-1000 live events must be positive")
     temporary = None
-    if args.data_dir is None:
+    if args.profile == "artifact-query":
+        directory = args.vault_dir
+    elif args.data_dir is None:
         temporary = tempfile.TemporaryDirectory(prefix="latticeshadow-validation-")
         directory = Path(temporary.name)
     else:
@@ -592,6 +731,10 @@ def main(argv: list[str] | None = None) -> int:
             detail = lifecycle(directory)
         elif args.profile == "performance":
             detail = performance(directory, count=args.events, warmup=args.warmup, queries=args.queries)
+        elif args.profile == "artifact-query":
+            detail = artifact_query(directory, args.app, artifact=args.artifact,
+                                    expected_events=args.expected_events,
+                                    warmup=args.warmup, queries=args.queries)
         else:
             progress = directory / "soak-progress.jsonl"
             detail = soak(directory, seconds=args.seconds, interval=args.sample_interval,
