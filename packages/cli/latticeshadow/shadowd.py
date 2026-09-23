@@ -637,6 +637,7 @@ def run_daemon():
     # created on that boundary and starts at EOF, so old commands stay excluded.
     history_watcher = None
     terminal_enabled_last = False
+    terminal_epoch_last = None
 
     replay_startup_events()
     startup_stop.set()
@@ -780,14 +781,18 @@ def run_daemon():
             # Avoid touching history while disabled; on the next consented
             # enable, seek to EOF before polling so old commands stay excluded.
             try:
-                terminal_enabled = consent.capture_enabled("terminal_history")
+                terminal_enabled, terminal_epoch = consent.terminal_history_state()
                 history_watcher, terminal_enabled_last, new_cmds = _terminal_history_step(
-                    history_watcher, terminal_enabled_last, terminal_enabled)
+                    history_watcher,
+                    terminal_enabled_last and terminal_epoch == terminal_epoch_last,
+                    terminal_enabled)
+                terminal_epoch_last = terminal_epoch
                 if new_cmds:
                     for cmd in new_cmds:
                         cmd_text = cmd["text"]
                         cmd_ts = cmd["timestamp"]
-                        if not consent.capture_enabled("terminal_history"):
+                        current_enabled, current_epoch = consent.terminal_history_state()
+                        if not current_enabled or current_epoch != terminal_epoch:
                             break
                         if not capture_allowed("terminal", cmd_text):
                             continue

@@ -46,6 +46,7 @@ DEFAULTS = {
         "terminal_history": False,
         "ambient_context": False,
         "paused": False,
+        "terminal_history_epoch": 0,
         "excluded_sources": [],
         "excluded_literals": [],
     },

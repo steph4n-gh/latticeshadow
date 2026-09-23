@@ -209,6 +209,33 @@ def test_terminal_history_can_enable_after_daemon_started_disabled(setup_test_en
     watcher, active, entries = shadowd._terminal_history_step(watcher, active, True)
     assert [entry["text"] for entry in entries] == ["git status --after-enable"]
 
+
+def test_rapid_pause_resume_between_polls_discards_history(setup_test_env, tmp_path, monkeypatch):
+    from latticeshadow import consent
+
+    shadowd = setup_test_env["shadowd"]
+    histfile = tmp_path / "synthetic_zsh_history"
+    histfile.write_text("git status --before-start\n", encoding="utf-8")
+    monkeypatch.setenv("HISTFILE", str(histfile))
+    choose_capture_sources(clipboard=False, terminal_history=True)
+    enabled, old_epoch = consent.terminal_history_state()
+    assert enabled
+    watcher, active, _ = shadowd._terminal_history_step(None, False, enabled)
+
+    consent.set_paused(True)
+    with histfile.open("a", encoding="utf-8") as history:
+        history.write("git status --during-rapid-pause\n")
+    consent.set_paused(False)
+    enabled, new_epoch = consent.terminal_history_state()
+    assert enabled and new_epoch == old_epoch + 2
+    watcher, active, entries = shadowd._terminal_history_step(
+        watcher, active and new_epoch == old_epoch, enabled)
+    assert active and entries == []
+    with histfile.open("a", encoding="utf-8") as history:
+        history.write("git status --after-resume\n")
+    watcher, active, entries = shadowd._terminal_history_step(watcher, active, enabled)
+    assert [entry["text"] for entry in entries] == ["git status --after-resume"]
+
 # --- CLI Command Lifecycle Tests ---
 
 def test_capture_requires_explicit_choices_before_enable(setup_test_env, monkeypatch):
