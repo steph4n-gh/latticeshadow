@@ -203,7 +203,7 @@ def search_events(vault: Any, query: str, *, scope: dict[str, Any] | None = None
     selected = _scope(scope)
     if selected["projects"] == () or selected["sources"] == ():
         return []
-    if not hasattr(vault, "revision"):
+    if not isinstance(getattr(vault, "db_path", None), str) or not hasattr(vault, "revision"):
         # Compatibility for callers with an older, noncanonical test vault.
         result = vault.search(query, n_results=limit, hybrid=True)
         ranked = list(zip(result.ids, result.scores))
