@@ -243,24 +243,23 @@ def do_search(query, paste_mode=False):
     try:
         vault = get_vault()
         if not vault or vault.count() == 0:
-            print("No matching clipboard history found.")
+            print("No matching memories found.")
             return
-    except Exception:
-        print("No matching clipboard history found.")
-        return
+    except Exception as exc:
+        raise SystemExit(f"Search failed while opening the vault: {exc}") from exc
 
     if not paste_mode:
         print(f"Searching for '{query}'...")
     try:
         res = vault.search(query, n_results=5, hybrid=True)
         if not res or not res.documents:
-            print("No matching clipboard history found.")
+            print("No matching memories found.")
             return
 
         if paste_mode:
             # Copy the top result back to the clipboard and exit
             top_doc = res.documents[0]
-            proc = subprocess.run(["pbcopy"], input=top_doc.encode("utf-8"))
+            subprocess.run(["pbcopy"], input=top_doc.encode("utf-8"), check=True)
             # Truncate for display
             display = top_doc if len(top_doc) <= 120 else top_doc[:120] + "..."
             print(f"✓ Copied to clipboard: {display}")
@@ -276,8 +275,8 @@ def do_search(query, paste_mode=False):
             display = doc if len(doc) <= 200 else doc[:200] + "..."
             print(f"\n\033[96m--- Result {i+1} (Score: {score:.4f}){ts_str} ---\033[0m")
             print(display)
-    except Exception:
-        print("No matching clipboard history found.")
+    except Exception as exc:
+        raise SystemExit(f"Search failed: {exc}") from exc
 
 
 def do_paste(query):
@@ -482,7 +481,22 @@ def do_rebuild_index(args):
         print(f"Database backup (keep private): {backup}")
 
 
+def _set_launch_agent_enabled(enabled: bool) -> None:
+    action = "enable" if enabled else "disable"
+    service = f"gui/{os.getuid()}/{PLIST_LABEL}"
+    result = subprocess.run(["launchctl", action, service], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"Failed to {action} LatticeShadow at login: {result.stderr.strip()}")
+
+
 def do_install():
+    # A plist in LaunchAgents is discovered at login. Keep installation itself
+    # from enrolling capture, including on the next login or reboot.
+    if os.path.exists(PLIST_PATH):
+        do_disable()
+    else:
+        _set_launch_agent_enabled(False)
+
     log_dir = get_log_dir()
     os.makedirs(log_dir, mode=0o700, exist_ok=True)
     os.chmod(log_dir, 0o700)
@@ -509,6 +523,13 @@ def do_install():
         plistlib.dump(plist, f)
     print(f"✓ Installed launchd plist at {PLIST_PATH}")
 
+    # A checkout update changes the daemon's source hashes. The explicit
+    # install step accepts the currently installed code as the new baseline.
+    from latticeshadow.integrity import compute_manifest, write_manifest
+
+    write_manifest(compute_manifest())
+    print("✓ Refreshed local daemon integrity baseline.")
+
     # Migrate old automatic hooks, preserving an explicit shell opt-in.
     zshrc = os.path.expanduser("~/.zshrc")
     opted_in = False
@@ -518,7 +539,7 @@ def do_install():
     _configure_shell(opted_in)
 
     print("\nInstall complete! Run 'shadow enable' to start the daemon.")
-    print("Before first run, review listeners with: shadow consent wizard")
+    print("Before first run, choose capture sources with: shadow consent wizard")
     print("Optional shell widgets: shadow shell enable")
     print("\n💡 Tip: Unlock advanced features:")
     print("  - Enable active browser tracking: 'shadow config set inputs.ambient_context true'")
@@ -527,6 +548,21 @@ def do_install():
 
 
 def do_enable():
+    from latticeshadow import consent
+    from latticeshadow.integrity import verify_integrity
+
+    pending = consent.pending_capture_sources()
+    if pending:
+        raise SystemExit(
+            f"Choose capture sources before starting: {', '.join(pending)}. "
+            "Run 'shadow consent wizard' or 'shadow consent set <source> on|off' for each."
+        )
+    passed, violations = verify_integrity()
+    if not passed:
+        raise SystemExit(
+            f"Daemon source changed ({len(violations)} file(s)). "
+            "Review the update, then run 'shadow install' to refresh the local integrity baseline."
+        )
     if os.environ.get("LATTICESHADOW_EMBEDDING_MODEL") != "hash":
         from latticeshadow.vaults import _local_model
 
@@ -554,8 +590,13 @@ def do_enable():
         raise SystemExit("Error: plist not found. Run 'shadow install' first.")
     subprocess.run(["launchctl", "unload", PLIST_PATH],
                     capture_output=True)  # unload first to avoid double-load
+    try:
+        _set_launch_agent_enabled(True)
+    except SystemExit as exc:
+        raise SystemExit(f"Failed to start LatticeShadow: {exc}") from exc
     result = subprocess.run(["launchctl", "load", PLIST_PATH], capture_output=True, text=True)
     if result.returncode != 0:
+        _set_launch_agent_enabled(False)
         raise SystemExit(f"Failed to start LatticeShadow: {result.stderr.strip()}")
     print("✓ LatticeShadow daemon enabled and started.")
 
@@ -578,6 +619,7 @@ def do_disable():
             print(f"Warning: SMAppService unregistration failed: {error}.")
 
     if os.path.exists(PLIST_PATH):
+        _set_launch_agent_enabled(False)
         result = subprocess.run(["launchctl", "unload", PLIST_PATH], capture_output=True, text=True)
         if result.returncode != 0:
             status = subprocess.run(["launchctl", "list", PLIST_LABEL], capture_output=True)
@@ -620,6 +662,8 @@ def do_remove():
 
 
 def do_status():
+    from latticeshadow import consent
+
     # Check if daemon is running via launchctl
     res = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
     is_running = False
@@ -636,6 +680,9 @@ def do_status():
         print("Daemon:   \033[92m● RUNNING\033[0m")
     else:
         print("Daemon:   \033[91m● STOPPED\033[0m")
+    pending = consent.pending_capture_sources()
+    if pending:
+        print(f"Capture choices needed: {', '.join(pending)} (run 'shadow consent wizard')")
 
     # Database info
     db_path = get_db_path()
@@ -1179,7 +1226,19 @@ def do_config(args):
     action = getattr(args, "config_action", None)
 
     if action == "set":
-        cfg.set(args.key, args.value)
+        from latticeshadow import consent
+
+        surface = next(
+            (name for name, spec in consent.SURFACES.items() if spec["config_key"] == args.key),
+            None,
+        )
+        if surface:
+            value = args.value.lower()
+            if value not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
+                raise SystemExit("Use on|off for a capture, listener, or sync setting.")
+            consent.set_consent(surface, value in ("on", "true", "yes", "1"))
+        else:
+            cfg.set(args.key, args.value)
         print(f"Set {args.key} = {args.value}")
         # Show auto-model if it was set
         if args.key == "memory.provider":
@@ -2044,7 +2103,7 @@ def main():
         description="LatticeShadow — Private Local-First Memory Companion",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""commands:
-  search <query>  Search your clipboard history semantically
+  search <query>  Search saved memories semantically
   paste  <query>  Search and copy the #1 result back to clipboard
   watch           Live stream of clipboard captures (Ctrl+C to stop)
   status          Check daemon and database status

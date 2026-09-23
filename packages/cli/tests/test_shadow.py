@@ -153,7 +153,84 @@ def run_cli(cli, args, mock_input=None):
          patch("builtins.input", return_value=mock_input or ""):
         cli.main()
 
+
+def choose_capture_sources(clipboard=True, terminal_history=False):
+    from latticeshadow.consent import set_consent
+
+    set_consent("clipboard", clipboard)
+    set_consent("terminal_history", terminal_history)
+
 # --- CLI Command Lifecycle Tests ---
+
+def test_capture_requires_explicit_choices_before_enable(setup_test_env, monkeypatch):
+    from latticeshadow import config, consent
+
+    cli = setup_test_env["shadow_cli"]
+    shadowd = setup_test_env["shadowd"]
+    assert config.get("inputs.clipboard") is False
+    assert config.get("inputs.terminal_history") is False
+    assert consent.pending_capture_sources() == ["clipboard", "terminal_history"]
+
+    monkeypatch.setattr(cli, "get_or_create_master_key", lambda: pytest.fail("enable passed consent gate"))
+    with pytest.raises(SystemExit, match="Choose capture sources before starting"):
+        cli.do_enable()
+    shadowd.run_daemon()
+    assert not setup_test_env["db_path"].exists()
+
+    choose_capture_sources(clipboard=False, terminal_history=False)
+    assert consent.pending_capture_sources() == []
+    assert consent.capture_enabled("clipboard") is False
+    assert consent.capture_enabled("terminal_history") is False
+
+
+def test_legacy_capture_settings_require_confirmation_without_rewriting_them(setup_test_env):
+    from latticeshadow import config, consent
+
+    config.set("inputs.clipboard", "true")
+    config.set("inputs.terminal_history", "false")
+    assert consent.pending_capture_sources() == ["clipboard", "terminal_history"]
+    assert consent.capture_enabled("clipboard") is False
+    assert config.get("inputs.clipboard") is True
+
+    consent.set_consent("clipboard", True)
+    consent.set_consent("terminal_history", False)
+    assert consent.pending_capture_sources() == []
+    assert consent.capture_enabled("clipboard") is True
+
+    # A direct edit to config.toml cannot silently expand capture after consent.
+    config.set("inputs.terminal_history", "true")
+    assert consent.pending_capture_sources() == ["terminal_history"]
+    assert consent.capture_enabled("terminal_history") is False
+
+
+def test_config_command_records_capture_choice(setup_test_env):
+    from latticeshadow import consent
+
+    cli = setup_test_env["shadow_cli"]
+    run_cli(cli, ["config", "set", "inputs.clipboard", "true"])
+    assert consent.capture_enabled("clipboard") is True
+    with pytest.raises(SystemExit, match=r"Use on\|off"):
+        run_cli(cli, ["config", "set", "inputs.terminal_history", "maybe"])
+    assert consent.pending_capture_sources() == ["terminal_history"]
+
+
+def test_search_distinguishes_empty_results_from_errors(setup_test_env, monkeypatch, capsys):
+    cli = setup_test_env["shadow_cli"]
+    vault = MagicMock()
+    monkeypatch.setattr(cli, "get_vault", lambda: vault)
+
+    vault.count.return_value = 0
+    cli.do_search("missing")
+    assert "No matching memories found." in capsys.readouterr().out
+
+    vault.count.return_value = 1
+    vault.search.side_effect = RuntimeError("test search failure")
+    with pytest.raises(SystemExit, match="Search failed: test search failure"):
+        cli.do_search("broken")
+
+    monkeypatch.setattr(cli, "get_vault", lambda: (_ for _ in ()).throw(RuntimeError("test open failure")))
+    with pytest.raises(SystemExit, match="Search failed while opening the vault: test open failure"):
+        cli.do_search("broken")
 
 def test_cli_remember_initializes_store_without_capture(setup_test_env):
     cli = setup_test_env["shadow_cli"]
@@ -171,7 +248,7 @@ def test_cli_remember_initializes_store_without_capture(setup_test_env):
     assert events[0]["text"] == "Check release tests"
 
 
-def test_cli_install(setup_test_env, capsys):
+def test_cli_install(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
     
     assert not os.path.exists(setup_test_env["key_file"])
@@ -200,10 +277,15 @@ def test_cli_install(setup_test_env, capsys):
     assert plist_data["Label"] == cli.PLIST_LABEL
     assert plist_data["RunAtLoad"] is True
     assert plist_data["KeepAlive"] == {"SuccessfulExit": False}
+    mock_subprocess_run.assert_any_call(
+        ["launchctl", "disable", f"gui/{os.getuid()}/{cli.PLIST_LABEL}"],
+        capture_output=True,
+        text=True,
+    )
     assert not (setup_test_env["log_dir"] / "latticeshadow.zsh").exists()
     assert not setup_test_env["zshrc_path"].exists()
 
-def test_cli_install_idempotency(setup_test_env, capsys):
+def test_cli_install_idempotency(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
     
     # Run install first time
@@ -215,8 +297,28 @@ def test_cli_install_idempotency(setup_test_env, capsys):
     assert first_plist == setup_test_env["plist_path"].read_bytes()
     assert not setup_test_env["zshrc_path"].exists()
 
+
+def test_install_refreshes_integrity_baseline_after_upgrade(setup_test_env, mock_subprocess_run):
+    from latticeshadow import integrity
+
+    cli = setup_test_env["shadow_cli"]
+    cli.do_install()
+    assert integrity.verify_integrity() == (True, [])
+
+    stale = integrity.read_manifest()
+    stale["shadowd.py"] = "0" * 64
+    integrity.write_manifest(stale)
+    choose_capture_sources(clipboard=True)
+    with pytest.raises(SystemExit, match="Daemon source changed"):
+        cli.do_enable()
+
+    cli.do_install()
+    assert integrity.verify_integrity() == (True, [])
+
+
 def test_cli_enable_disable(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True)
     
     # Create a dummy plist file to pass existence checks
     os.makedirs(os.path.dirname(setup_test_env["plist_path"]), exist_ok=True)
@@ -229,6 +331,7 @@ def test_cli_enable_disable(setup_test_env, mock_subprocess_run):
     calls = [c[0][0] for c in mock_subprocess_run.call_args_list]
     assert any("unload" in cmd for cmd in calls)
     assert any("load" in cmd for cmd in calls)
+    assert any("enable" in cmd for cmd in calls)
 
     # Test disable
     mock_subprocess_run.reset_mock()
@@ -236,10 +339,12 @@ def test_cli_enable_disable(setup_test_env, mock_subprocess_run):
     assert mock_subprocess_run.call_count >= 1
     calls = [c[0][0] for c in mock_subprocess_run.call_args_list]
     assert any("unload" in cmd for cmd in calls)
+    assert any("disable" in cmd for cmd in calls)
 
 
 def test_cli_enable_reports_launch_failure(setup_test_env, mock_subprocess_run, capsys):
     cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True)
     os.makedirs(setup_test_env["plist_path"].parent, exist_ok=True)
     setup_test_env["plist_path"].write_text("invalid plist")
     mock_subprocess_run.return_value.returncode = 5
@@ -249,7 +354,26 @@ def test_cli_enable_reports_launch_failure(setup_test_env, mock_subprocess_run, 
     assert "enabled and started" not in capsys.readouterr().out
 
 
-def test_cli_install_refreshes_old_checkout(setup_test_env):
+def test_cli_enable_rolls_back_login_state_when_load_fails(setup_test_env, mock_subprocess_run):
+    cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True)
+    setup_test_env["plist_path"].parent.mkdir(parents=True, exist_ok=True)
+    setup_test_env["plist_path"].write_text("invalid plist")
+
+    def launch_result(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 5 if args[1] == "load" else 0
+        result.stderr = "Invalid property list" if result.returncode else ""
+        return result
+
+    mock_subprocess_run.side_effect = launch_result
+    with pytest.raises(SystemExit, match="Failed to start LatticeShadow: Invalid property list"):
+        cli.do_enable()
+    calls = [call.args[0][1] for call in mock_subprocess_run.call_args_list]
+    assert calls == ["unload", "enable", "load", "disable"]
+
+
+def test_cli_install_refreshes_old_checkout(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     setup_test_env["zshrc_path"].write_text(
         "# personal settings\n"
@@ -263,7 +387,7 @@ def test_cli_install_refreshes_old_checkout(setup_test_env):
     assert "LATTICESHADOW_ZSH" not in updated
 
 
-def test_shell_integration_is_explicit_and_reversible(setup_test_env):
+def test_shell_integration_is_explicit_and_reversible(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     zshrc = setup_test_env["zshrc_path"]
     original = "# personal settings\nbindkey '^I' expand-or-complete\n"
@@ -444,7 +568,7 @@ def test_cli_remove(setup_test_env, mock_subprocess_run, capsys):
 
 # --- Security and Permissions Tests ---
 
-def test_security_permissions(setup_test_env):
+def test_security_permissions(setup_test_env, mock_subprocess_run):
     cli = setup_test_env["shadow_cli"]
     
     # Perform install to create dirs/files
@@ -539,6 +663,7 @@ def test_edge_case_empty_db_no_traceback(setup_test_env, capsys):
 
 def test_edge_case_non_utf8_binary_graceful(setup_test_env, monkeypatch):
     shadowd = setup_test_env["shadowd"]
+    choose_capture_sources(clipboard=True)
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     
     mock_pb = MockPasteboard()
@@ -562,6 +687,7 @@ def test_edge_case_non_utf8_binary_graceful(setup_test_env, monkeypatch):
 
 def test_edge_case_extremely_long_content(setup_test_env, monkeypatch):
     shadowd = setup_test_env["shadowd"]
+    choose_capture_sources(clipboard=True)
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     
     mock_pb = MockPasteboard()
@@ -588,6 +714,7 @@ def test_edge_case_extremely_long_content(setup_test_env, monkeypatch):
 def test_shred_active_daemon_exit(setup_test_env, monkeypatch):
     shadowd = setup_test_env["shadowd"]
     cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True)
     
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     
@@ -627,6 +754,7 @@ def test_shred_active_daemon_exit(setup_test_env, monkeypatch):
 def test_deduplication(setup_test_env, monkeypatch):
     shadowd = setup_test_env["shadowd"]
     cli = setup_test_env["shadow_cli"]
+    choose_capture_sources(clipboard=True)
     
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     
@@ -669,7 +797,7 @@ def test_clipboard_capture_respects_disabled_input(setup_test_env, monkeypatch):
     cli = setup_test_env["shadow_cli"]
 
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
-    shadowd.config.set("inputs.clipboard", "false")
+    choose_capture_sources(clipboard=False)
 
     mock_pb = MockPasteboard()
     with patch_general_pasteboard(mock_pb):
@@ -691,6 +819,48 @@ def test_clipboard_capture_respects_disabled_input(setup_test_env, monkeypatch):
             t.join(timeout=1.0)
 
 
+def test_clipboard_revocation_skips_changes_while_daemon_runs(setup_test_env, monkeypatch):
+    from latticeshadow import config, consent
+
+    shadowd = setup_test_env["shadowd"]
+    cli = setup_test_env["shadow_cli"]
+    monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
+    choose_capture_sources(clipboard=True)
+    mock_pb = MockPasteboard()
+
+    with patch_general_pasteboard(mock_pb):
+        thread = threading.Thread(target=shadowd.run_daemon)
+        thread.start()
+        try:
+            time.sleep(0.2)
+            mock_pb.set_content("first captured clipboard entry")
+            deadline = time.monotonic() + 4
+            count = 0
+            while time.monotonic() < deadline:
+                if setup_test_env["db_path"].exists():
+                    with sqlite3.connect(setup_test_env["db_path"]) as conn:
+                        count = conn.execute(
+                            "SELECT COUNT(*) FROM vectors WHERE collection = 'clipboard'"
+                        ).fetchone()[0]
+                    if count:
+                        break
+                time.sleep(0.05)
+            assert count == 1
+
+            # Even a raw config edit cannot authorize capture that consent disallows.
+            config.set("inputs.clipboard", "false")
+            assert consent.capture_enabled("clipboard") is False
+            mock_pb.set_content("never captured clipboard entry")
+            time.sleep(0.2)
+            config.set("inputs.clipboard", "true")
+            time.sleep(0.2)
+            vault = cli.get_vault()
+            assert vault.count() == 1
+        finally:
+            shadowd._running = False
+            thread.join(timeout=2)
+
+
 def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup_test_env, monkeypatch, capsys):
     """Use a disposable pasteboard and store for the complete memory path."""
     from latticeshadow.timeline import fetch_events, search_events
@@ -698,7 +868,7 @@ def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup
 
     cli = setup_test_env["shadow_cli"]
     shadowd = setup_test_env["shadowd"]
-    shadowd.config.set("inputs.clipboard", "true")
+    choose_capture_sources(clipboard=True)
     shadowd.config.set("memory.hot_index_enabled", "true")
     monkeypatch.setattr(shadowd, "POLL_INTERVAL", 0.01)
     content = "Deploy the invoice service with rsync"

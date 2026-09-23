@@ -23,7 +23,8 @@ class TestConfig:
         assert config["memory"]["provider"] == "none"
         assert config["memory"]["dream_batch_size"] == 50
         assert config["memory"]["sensitivity_filter"] is True
-        assert config["inputs"]["clipboard"] is True
+        assert config["inputs"]["clipboard"] is False
+        assert config["inputs"]["terminal_history"] is False
 
     def test_set_and_get(self, tmp_path, monkeypatch):
         import latticeshadow.config as cfg

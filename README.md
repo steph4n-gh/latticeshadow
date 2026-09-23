@@ -43,7 +43,7 @@ the macOS client is not installed on Linux.
 | Area | Current state |
 | --- | --- |
 | Manual memory | `shadow remember`, timeline, search, summary, and explicit forget are implemented and tested with disposable data. Recall quality has a small labeled test set; broader evaluation is needed. |
-| Background capture | macOS clipboard and terminal capture are opt-in through `shadow install` and `shadow enable`. Automated tests exist; fresh install and upgrade behavior still need live desktop validation. |
+| Background capture | macOS clipboard and terminal capture start only after explicit source choices and `shadow enable`. Automated tests exist; broader desktop validation is still needed. |
 | Assistant access | `shadow mcp serve` implements a stdio MCP server with redacted recall and other tools. End-to-end use with a real MCP client is still on the backlog. |
 | Database | `latticeshadow-db` installs independently and supports document/vector storage, metadata, retrieval, and optional research indexes. |
 | Desktop and peer features | The menu-bar UI, cross-device sync, autonomous repair, and several retrieval modes are experimental. They are not the recommended first run. |
@@ -70,9 +70,9 @@ and accepts a caller-provided embedding function.
 
 ## Privacy, plainly
 
-Background capture starts only when you enable it. The clipboard and terminal
-sources are both on by default when you do; run `shadow consent wizard` first
-if you want to turn either off. Once enabled, capture can record personal
+Background capture starts only after you choose both clipboard and terminal
+history on or off, then run `shadow enable`. Both sources default to off. Use
+`shadow consent wizard` to review the choices. Once enabled, capture can record personal
 clipboard text and shell history. Password-manager concealment markers
 are recognized, but they do not guarantee that every secret is skipped. Review
 `shadow consent status` and the [capture guide](docs/GETTING_STARTED.md) first.

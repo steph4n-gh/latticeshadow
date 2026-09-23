@@ -27,7 +27,7 @@ import queue
 import threading
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-from latticeshadow import config
+from latticeshadow import config, consent
 
 LOG_DIR = os.path.expanduser("~/.latticeshadow")
 KEY_FILE = os.path.join(LOG_DIR, ".key")
@@ -283,6 +283,13 @@ def mirror_to_hot_vault(hot_vault, document: str, doc_id: str, metadata: dict) -
 
 
 def run_daemon():
+    pending = consent.pending_capture_sources()
+    if pending:
+        logger.error(
+            "Capture choices required for %s; run 'shadow consent wizard' before enabling.",
+            ", ".join(pending),
+        )
+        return
     # ── Runtime Self-Integrity Check ──────────────────────────────────────
     # Verify that no critical source modules have been tampered with since
     # the last known-good state. On first run, establishes the baseline.
@@ -309,7 +316,7 @@ def run_daemon():
         last_startup_count = -1
         while not startup_stop.is_set() and _running:
             try:
-                if not config.get("inputs.clipboard"):
+                if not consent.capture_enabled("clipboard"):
                     startup_stop.wait(POLL_INTERVAL)
                     continue
                 current_count = pasteboard.changeCount() if hasattr(pasteboard, "changeCount") else 0
@@ -431,6 +438,8 @@ def run_daemon():
             startup_events.clear()
 
         for startup_content in pending_startup_events:
+            if not consent.capture_enabled("clipboard"):
+                break
             try:
                 content = startup_content.strip()
                 if MIN_CONTENT_CHARS < len(content) < MAX_CONTENT_BYTES:
@@ -530,7 +539,7 @@ def run_daemon():
     # Setup history watcher if configured
     history_watcher = None
     from latticeshadow import config as cfg
-    if cfg.get("inputs.terminal_history"):
+    if consent.capture_enabled("terminal_history"):
         try:
             try:
                 from latticeshadow.history_watcher import TerminalHistoryWatcher as HistoryWatcherClass
@@ -551,8 +560,9 @@ def run_daemon():
     except Exception:
         last_change_count = 0
 
-    logger.info("Listening for clipboard events...")
-    _notify("LatticeShadow", "Clipboard monitoring active.")
+    if consent.capture_enabled("clipboard"):
+        logger.info("Listening for clipboard events...")
+        _notify("LatticeShadow", "Clipboard monitoring active.")
 
     sync_engine = None
     last_sync_time = 0
@@ -576,7 +586,10 @@ def run_daemon():
                     current_change_count = pasteboard.changeCount()
                 except Exception:
                     pass
-            if config.get("inputs.clipboard") and current_change_count != last_change_count:
+            clipboard_enabled = consent.capture_enabled("clipboard")
+            if not clipboard_enabled:
+                last_change_count = current_change_count
+            if clipboard_enabled and current_change_count != last_change_count:
                 last_change_count = current_change_count
 
                 # Skip concealed/sensitive content (password managers)
@@ -683,7 +696,7 @@ def run_daemon():
                     logger.warning("Ignored encoding error during pasteboard string retrieval: %s", ue)
 
             # Poll terminal history
-            if history_watcher:
+            if history_watcher and consent.capture_enabled("terminal_history"):
                 try:
                     new_cmds = history_watcher.poll()
                     if new_cmds:

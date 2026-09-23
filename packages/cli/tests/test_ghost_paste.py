@@ -402,6 +402,10 @@ def test_shell_loop_prefilling(setup_test_env, capsys, monkeypatch):
             
     monkeypatch.setattr("latticeshadow.history_watcher.TerminalHistoryWatcher", MockWatcher)
     
+    from latticeshadow.consent import set_consent
+    set_consent("clipboard", True)
+    set_consent("terminal_history", True)
+
     try:
         shadowd.run_daemon()
     except KeyboardInterrupt:

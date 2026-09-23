@@ -53,11 +53,9 @@ commands is expected: manual memory does not need a background process.
 ## macOS: choose background capture
 
 The daemon can watch copied text and new entries in your Zsh history file. This
-is more useful for recall and considerably more personal than a test note. By
-default, the `clipboard` and `terminal_history` source flags are **on**. Running
-`shadow enable` starts both unless you change those flags first. The consent
-wizard helps you review them, but the current daemon does not require wizard
-completion as a startup gate.
+is more useful for recall and considerably more personal than a test note. Both
+sources default to **off**. Before `shadow enable`, choose **on or off** for
+each source. The daemon will not start until those choices are recorded.
 
 ```sh
 shadow install
@@ -68,22 +66,32 @@ shadow status
 ```
 
 Answer every wizard prompt deliberately. Its defaults reflect the current
-configuration, including clipboard and terminal history being on in a fresh
-setup. For example, to capture clipboard text but leave shell history alone,
-set the latter off before enabling:
+configuration; both capture sources are off in a fresh setup. You can make the
+two required choices without the full wizard. For example, to capture clipboard
+text but leave shell history alone:
 
 ```sh
+shadow consent set clipboard on
 shadow consent set terminal_history off
 shadow consent status
 shadow enable
 ```
 
 `shadow install` prepares a launch agent and key material; it does not start the
-daemon. `shadow enable` loads the retrieval model and starts it. The daemon
+daemon, including at the next login. Re-running install stops an existing
+daemon; run `shadow enable` again when ready. `shadow enable` loads the retrieval
+model and starts it. The daemon
 captures future changes, not a guaranteed complete record of your past work.
 The Zsh history watcher begins at the end of the current history file, and
 history writes depend on your shell settings. Clipboard capture skips some
 concealed content but is not a reliable secret detector.
+
+On upgrade, existing source settings stay as configured, but an old setting
+without a recorded choice must be confirmed before capture restarts. Check
+`shadow consent status` and use the wizard or `shadow consent set` for each
+pending source. After updating the checkout, run `shadow install` again to
+refresh the local daemon code baseline, then `shadow enable`. Reinstalling
+stops the old daemon. Manual saves and searches do not require capture consent.
 
 Stop capture with:
 
@@ -95,7 +103,7 @@ shadow status
 If you want to change sources later, disable the daemon, run
 `shadow consent set <surface> on|off`, check `shadow consent status`, then enable
 it again. In particular, the terminal watcher is selected when the daemon
-starts. Disabling the daemon stops capture; it does not delete saved memories.
+starts. Disabling the daemon keeps it off across logins and reboots; it does not delete saved memories.
 Use `shadow forget --id ...` for selected events, or inspect `shadow remove`
 before uninstalling. `shadow remove` asks separately whether to delete local
 data.
@@ -149,7 +157,10 @@ client configuration that we have not verified end to end.
 | `shadow: command not found` | Activate the repository environment with `source .venv/bin/activate`; run `make setup` if it does not exist. |
 | First save or `shadow enable` cannot load the model | Check network access for the first Hugging Face download. Retry after connectivity returns. Avoid switching to hash embeddings in an existing collection. |
 | `shadow status` says `STOPPED` | This is normal for manual use. To start capture, review sources above, then run `shadow install` and `shadow enable`. |
-| Search says “No matching clipboard history found” | The message is also used when search encounters an error. Check `shadow timeline` for saved events, then run `shadow doctor` and inspect the local daemon log if capture is involved. |
+| `shadow enable` asks for capture choices | Run `shadow consent wizard`, or set both `clipboard` and `terminal_history` explicitly with `shadow consent set <source> on\|off`, then retry. |
+| `shadow enable` says the daemon source changed | Review the checkout update, run `shadow install` to refresh the local code baseline, then retry `shadow enable`. |
+| Search says “No matching memories found” | The store is empty or the query found no match. Check `shadow timeline` for saved events. |
+| Search says “Search failed” | Search encountered an error. Read the error, then run `shadow doctor`; inspect the local daemon log if capture is involved. |
 | Old data reports an embedding-model mismatch | Stop capture with `shadow disable`, then run `shadow rebuild-index --yes`. It re-embeds saved events and creates a private database backup. Stop other writers during the rebuild. |
 | Capture is running but no terminal event appears | Check `shadow consent status`, your `HISTFILE` / `~/.zsh_history`, and whether your shell has written the command to that file. The watcher does not replay old history on a normal start. |
 
