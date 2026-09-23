@@ -1,5 +1,11 @@
 # Daily-use alpha validation
 
+Measured local runs: [retrieval relevance](recall-local.md),
+[15-minute driver smoke](local-smoke-2026-09-23.md), and
+[10,000-event local precheck](local-performance-2026-09-23.md). Each report
+states which candidate and gate it covers; the latter two are preparatory
+checks, not the final Mini or installed-app result.
+
 These checks use disposable, authored data. They never read the default vault,
 clipboard, shell history, Keychain, or personal credentials. The JSON summary is
 safe to review: it contains counts, timings, revision, system information, and
