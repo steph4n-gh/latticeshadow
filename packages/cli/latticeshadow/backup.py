@@ -26,6 +26,17 @@ MAX_ARCHIVE_BYTES = MAX_PLAINTEXT_BYTES + 64
 MAX_RECORDS = 100_000
 
 
+def _validate_metadata(metadata: dict[str, Any]) -> None:
+    if len(json.dumps(metadata, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+        raise ValueError("Backup metadata exceeds the event limit")
+    for field in ("timestamp", "captured_at"):
+        if metadata.get(field) is not None:
+            _utc(metadata[field], legacy=True)
+    for field in ("source", "project", "event_type"):
+        if metadata.get(field) is not None and not isinstance(metadata[field], str):
+            raise ValueError(f"Backup metadata {field} is invalid")
+
+
 def _key(passphrase: str, salt: bytes) -> bytes:
     if not isinstance(passphrase, str) or not 8 <= len(passphrase) <= 4096:
         raise ValueError("Backup passphrase must contain 8 to 4096 characters")
@@ -60,6 +71,7 @@ def _snapshot(vault: Any) -> dict[str, Any]:
             metadata = json.loads(metadata_json or "{}")
             if not isinstance(metadata, dict):
                 raise ValueError(f"Source event {doc_id} has invalid metadata")
+            _validate_metadata(metadata)
             _utc(created_at, legacy=True)
             _utc(last_accessed, legacy=True)
             item = {"id": doc_id, "text": document, "metadata": metadata,
@@ -172,8 +184,7 @@ def _validate(payload: Any) -> None:
             raise ValueError("Backup event text is invalid")
         if not isinstance(record["metadata"], dict):
             raise ValueError("Backup metadata is invalid")
-        if len(json.dumps(record["metadata"]).encode("utf-8")) > 64 * 1024:
-            raise ValueError("Backup metadata exceeds the event limit")
+        _validate_metadata(record["metadata"])
         _utc(record["created_at"], legacy=True)
         _utc(record["last_accessed"], legacy=True)
     for doc_id in deleted:
@@ -211,6 +222,10 @@ def restore_backup(archive_path: str | os.PathLike[str], destination_db_path: st
         with sqlite3.connect(staging) as conn:
             conn.executemany("INSERT INTO deleted_ids (collection, doc_id) VALUES (?, ?)",
                              [(MAIN_COLLECTION, doc_id) for doc_id in payload["deleted_ids"]])
+            conn.execute(
+                "UPDATE collection_meta SET restored_from_model = ? WHERE name = ?",
+                (payload["source_model"], MAIN_COLLECTION),
+            )
         with sqlite3.connect(staging) as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         del vault

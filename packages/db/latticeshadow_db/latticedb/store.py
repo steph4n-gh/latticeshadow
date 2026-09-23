@@ -1551,6 +1551,7 @@ class VectorStore:
                     name TEXT PRIMARY KEY,
                     embedding_dim INTEGER,
                     embedding_model TEXT,
+                    restored_from_model TEXT,
                     encrypted_key_blob TEXT,
                     vector_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1585,6 +1586,10 @@ class VectorStore:
                 pass  # Column already exists
             try:
                 conn.execute('ALTER TABLE collection_meta ADD COLUMN embedding_model TEXT')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute('ALTER TABLE collection_meta ADD COLUMN restored_from_model TEXT')
             except sqlite3.OperationalError:
                 pass  # Column already exists
             conn.commit()

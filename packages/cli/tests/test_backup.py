@@ -38,6 +38,9 @@ def test_restore_new_destination_preserves_fields_without_source_key(source, tmp
         "portable memory", "2026-09-17T14:00:00.000000Z", "ops")
     with sqlite3.connect(target) as conn:
         assert conn.execute("SELECT created_at FROM vectors WHERE doc_id = ?", (kept,)).fetchone()[0] == original_created
+        assert conn.execute(
+            "SELECT restored_from_model FROM collection_meta WHERE name = 'clipboard'"
+        ).fetchone()[0] == result["source_model"]
     with pytest.raises(ValueError, match="deleted"):
         add_event(reopened, "note", "remove me", source="manual", doc_id=removed)
     with pytest.raises(PermissionError):
