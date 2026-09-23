@@ -2126,20 +2126,23 @@ class VectorStore:
 
             try:
                 with self._connect() as conn:
-                    inserted = conn.executemany(
-                        '''INSERT OR IGNORE INTO vectors
-                           (doc_id, text_hash, document, vector_blob, metadata_json, entropy, collection)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                        rows
-                    )
-                    inserted_count = inserted.rowcount
+                    inserted_rows = []
+                    for row in rows:
+                        inserted = conn.execute(
+                            '''INSERT OR IGNORE INTO vectors
+                               (doc_id, text_hash, document, vector_blob, metadata_json, entropy, collection)
+                               VALUES (?, ?, ?, ?, ?, ?, ?)''', row
+                        )
+                        if inserted.rowcount:
+                            inserted_rows.append(row)
+                    inserted_count = len(inserted_rows)
                     
                     # Compute sparse term frequency and document length for all inserted documents
                     sparse_rows = []
                     len_rows = []
                     import re
                     from collections import Counter
-                    for doc_id, _, document, _, _, _, _ in rows:
+                    for doc_id, _, document, _, _, _, _ in inserted_rows:
                         if document:
                             terms = re.findall(r'\b[a-zA-Z0-9]+\b', document.lower())
                             doc_len = len(terms)

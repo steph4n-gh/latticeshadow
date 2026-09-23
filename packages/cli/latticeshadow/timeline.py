@@ -236,18 +236,23 @@ def add_event(vault: Any, event_type: str, text: str, *, source: str | None = No
     if timestamp is None and "timestamp" in user_meta:
         timestamp = user_meta["timestamp"]
     occurred_at = _utc(timestamp, legacy=isinstance(timestamp, (int, float))) if timestamp is not None else None
+    if "timestamp" in user_meta and _utc(user_meta["timestamp"], legacy=True) != occurred_at:
+        raise ValueError("metadata timestamp conflicts with the event argument")
+    generated = {"event_type", "source", "project", "timestamp", "captured_at", "timestamp_inferred"}
+    supplied = {key: value for key, value in user_meta.items() if key not in generated}
+
+    def assert_same_event(event: dict[str, Any]) -> None:
+        comparable = {key: value for key, value in event["metadata"].items() if key not in generated}
+        if (event["text"], event["type"], event["source"], event["project"], comparable) != (
+                text, event_type, source, project, supplied) or (
+                occurred_at is not None and occurred_at != event["timestamp"]):
+            raise ValueError("event ID already exists with different content")
+
     if doc_id is not None:
         _label(doc_id, "event ID")
         existing = get_events(vault, [doc_id])
         if existing:
-            event = existing[0]
-            generated = {"event_type", "source", "project", "timestamp", "captured_at", "timestamp_inferred"}
-            comparable = {key: value for key, value in event["metadata"].items() if key not in generated}
-            supplied = {key: value for key, value in user_meta.items() if key not in generated}
-            if (event["text"], event["type"], event["source"], event["project"], comparable) != (
-                    text, event_type, source, project, supplied) or (
-                    occurred_at is not None and occurred_at != event["timestamp"]):
-                raise ValueError("event ID already exists with different content")
+            assert_same_event(existing[0])
             return doc_id
     else:
         doc_id = f"{EVENT_PREFIXES[event_type]}_{uuid.uuid4()}"
@@ -262,6 +267,10 @@ def add_event(vault: Any, event_type: str, text: str, *, source: str | None = No
     if len(encoded) > MAX_METADATA_BYTES:
         raise ValueError(f"event metadata must be at most {MAX_METADATA_BYTES} UTF-8 bytes")
     vault.add(documents=[text], ids=[doc_id], metadatas=[user_meta])
+    persisted = get_events(vault, [doc_id])
+    if not persisted:
+        raise RuntimeError("Canonical event was not persisted")
+    assert_same_event(persisted[0])
     return doc_id
 
 

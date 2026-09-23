@@ -130,3 +130,18 @@ def test_retention_uses_occurrence_time_and_literal_exclusions(vaults):
     assert result["canonical_deleted"] == 1
     assert get_events(vault, [old]) == []
     assert get_events(vault, [new])[0]["id"] == new
+
+
+def test_conflicting_retry_race_rechecks_canonical_row(vaults, monkeypatch):
+    vault, path = vaults
+    rival = open_main_vault(path, "disposable-key")
+    original_add = vault.add
+
+    def racing_add(*args, **kwargs):
+        add_event(rival, "note", "rival content", source="manual", doc_id="same-id")
+        return original_add(*args, **kwargs)
+
+    monkeypatch.setattr(vault, "add", racing_add)
+    with pytest.raises(ValueError, match="different content"):
+        add_event(vault, "note", "my content", source="manual", doc_id="same-id")
+    assert get_events(rival, ["same-id"])[0]["text"] == "rival content"
