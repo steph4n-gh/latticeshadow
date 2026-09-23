@@ -200,10 +200,11 @@ its API and optional research features.
 
 ## Assistant access (explicit grant)
 
-After you have saved and assigned a note, make a local sharing grant for exactly
-the project and source you want an assistant to see:
+Save a harmless note in a named project, then grant an assistant access to that
+project and source:
 
 ```sh
+shadow remember note "Restart the widget queue" --project ops --source manual
 shadow mcp grant create --project ops --source manual
 shadow mcp grant preview GRANT_ID
 shadow mcp serve --grant GRANT_ID
