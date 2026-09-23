@@ -43,8 +43,10 @@ covered a fresh clone, setup, manual recall, explicit capture choices, synthetic
 clipboard capture, deletion, and shutdown. An upgrade from the prior checkout
 preserved source flags, required missing consent choices, refreshed the local
 integrity baseline through reinstall, and kept enable/disable state across
-reboots. The CI base image has Gatekeeper disabled, so signing, notarization,
-native app packaging, and real desktop interaction remain to be validated.
+reboots. The CI base image has Gatekeeper disabled. The later
+[unsigned alpha candidate](validation/desktop-gui.md) passed a packaged desktop
+journey, while signing, notarization, stock Gatekeeper, and populated legacy
+upgrade remain open release checks.
 
 ## 3. Prove the core memory workflow
 

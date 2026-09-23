@@ -8,8 +8,9 @@ redacted view through a local MCP server. LatticeShadow combines a reusable
 SQLite vector store with a macOS client.
 
 This is a **development prototype**, not a finished clipboard app or a security
-product. The daily-use alpha is being validated; the integrated code has tests,
-while its full desktop, guest-install, and long-run checks are still underway. The
+product. The daily-use alpha is being validated; integrated tests and selected
+desktop and guest-install checks pass, while its two-hour soak and public-binary
+release gates remain open. The
 [capability guide](docs/CAPABILITIES.md) says exactly where the edges are.
 
 ## First run on macOS
@@ -86,7 +87,7 @@ document text, while IDs and metadata remain readable in SQLite. Its
 reversible vector rotation preserves similarity geometry, so rotated vectors
 are not opaque ciphertext. Key storage can fall back when platform protection
 is unavailable. Simulated P2P proofs are not zk-SNARKs. There has been no
-independent security review.
+external third-party security audit.
 
 iCloud sync writes encrypted packets while the live vault and keys stay local.
 Older installations that stored their live vault in iCloud need the

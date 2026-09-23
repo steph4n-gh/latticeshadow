@@ -560,8 +560,9 @@ source and deletion behavior. It is not a password manager, exhaustive activity
 logger, security boundary against other local processes, or guarantee that every
 secret is detected. A local model does not make bad input safe, and rotated
 vectors are not opaque encryption. Simulated P2P proofs are not zk-SNARKs.
-Source setup and ordinary CLI flows work today; the full desktop, upgrade,
-long-run, and public-binary validation is still in progress. The
+Source setup, ordinary CLI flows, and selected packaged desktop journeys work
+today. Cross-app shortcut behavior, populated legacy upgrade, long-run, and
+public-binary validation remain open. The
 [capability guide](CAPABILITIES.md) and [alpha evidence ledger](ALPHA_PLAN.md)
 track what has actually been tested.
 
