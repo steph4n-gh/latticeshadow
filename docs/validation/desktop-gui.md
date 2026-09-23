@@ -15,12 +15,22 @@ capture source was selected.
 | Search, filter, preview | Searching `widget` returned one result. Project filter `fieldguide` kept that result. Preview showed the exact synthetic text, note source, project, times, and event reference. |
 | Copy | **Copy** reported success; the guest pasteboard contained exactly `The widget queue recovered after a synthetic deployment drill.` |
 | Pause and consent | **Pause capture** changed to **Resume capture** while status remained **Capture needs consent**. Resume showed **Choose capture sources before resuming: clipboard, terminal_history** and kept capture paused. |
+| Open link/file | A second synthetic event pointed to a file in the disposable guest. **Open link/file** brought Finder forward with that file selected. |
+| Assign project | Assigning the note from `fieldguide` to `releasecheck` updated its row and preview. Filtering by `fieldguide` gave **No matches**; filtering by `releasecheck` returned the note. |
+| Forget | **Forget…** warned that older backups and the original source might still contain the event. After confirming deletion of the synthetic note, the `releasecheck` filter showed **No matches** and an empty preview. Clearing it left only the file event. |
+| Rapid search | Quickly replacing an absent query with `widget` ended on the latest `widget` query with both synthetic events. Rows and preview cleared while searching. This visual sequence does not prove every out-of-order completion race. |
 
-This was a bounded smoke of the exact ZIP. The full Open/Assign/Forget journey
-was exercised on the predecessor `b603442` package below; it was not repeated
-on `20669ff`. The cross-app global shortcut, race ordering under overlapping
-searches, daemon capture, and a sanitized panel-only screenshot remain unproven
-by this run. The disposable VM was stopped afterward.
+Escape closed Recall. With Finder in front, Option-Space sent through Screen
+Sharing instead triggered Finder Quick Look, as in the predecessor run. Remote
+modifier forwarding was not established, so the cross-app global shortcut
+remains unproven. A Return press on a selected result did not yield copy
+feedback or pasteboard text in this remote run; the **Copy** button result above
+is the verified copy path. No sanitized panel-only screenshot was retained.
+
+The app was installed from the ZIP inside the disposable VM without a
+quarantine attribute. Although Gatekeeper assessments were enabled there, this
+does not validate the normal quarantined-download or notarization path. Daemon
+capture was not enabled. The guest was stopped after the checks.
 
 ## Preceding packaged app in a disposable Mac VM
 
