@@ -224,6 +224,7 @@ independent client test and a synthetic Codex CLI host walkthrough.
 | `shadow status` says `STOPPED` | This is normal for manual use. To start capture, review sources above, then run `shadow install` and `shadow enable`. |
 | `shadow enable` asks for capture choices | Run `shadow consent wizard`, or set both `clipboard` and `terminal_history` explicitly with `shadow consent set <source> on\|off`, then retry. |
 | `shadow enable` says the daemon source changed | Review the checkout update, run `shadow install` to refresh the local code baseline, then retry `shadow enable`. |
+| An existing master key cannot be unlocked | Retry from an unlocked macOS login session and inspect any Keychain access prompt. LatticeShadow leaves the key file and vault in place; do not remove them while checking recovery. |
 | Search says “No matching memories found” | The store is empty or the query found no match. Check `shadow timeline` for saved events. |
 | Search says “Search failed” | Search encountered an error. Read the error, then run `shadow doctor`; inspect the local daemon log if capture is involved. |
 | Old data reports an embedding-model mismatch | Stop capture with `shadow disable`, then run `shadow rebuild-index --yes`. It re-embeds saved events and creates a private database backup. Stop other writers during the rebuild. |

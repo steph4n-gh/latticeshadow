@@ -118,6 +118,8 @@ def get_or_create_master_key() -> str:
             return None
 
     # 1. Try Keychain first
+    stored = None
+    keychain_lookup_failed = False
     try:
         stored = keychain.retrieve_key()
         if stored:
@@ -136,7 +138,7 @@ def get_or_create_master_key() -> str:
                     print("\u2713 Migrated legacy master key to a Keychain keypair-wrapped key.")
                     return stored
     except Exception:
-        pass
+        keychain_lookup_failed = True
 
     # 2. Fall back to flat file
     key_file = get_key_file()
@@ -162,6 +164,18 @@ def get_or_create_master_key() -> str:
                     f.write(wrapped)
                 print("\u2713 Migrated flat-file legacy master key to a Keychain keypair-wrapped key.")
                 return stored
+        raise PermissionError(
+            "Existing master key could not be unlocked. The key file was left unchanged; "
+            "try again from an unlocked macOS login session."
+        )
+
+    # A lost or inaccessible Keychain entry must never turn an existing vault
+    # into a new-key vault. Do not replace a key that may still be recoverable.
+    if os.path.exists(get_db_path()) or stored or keychain_lookup_failed:
+        raise PermissionError(
+            "Existing vault or Keychain key cannot be unlocked. No new key was created; "
+            "check Keychain access from an unlocked macOS login session."
+        )
 
     # 3. Generate new key
     raw_key = hashlib.sha256(os.urandom(64)).hexdigest()
@@ -198,7 +212,10 @@ def get_vault(create_if_missing=False):
         os.makedirs(os.path.dirname(db_path), mode=0o700, exist_ok=True)
         os.chmod(os.path.dirname(db_path), 0o700)
 
-    master_key = get_or_create_master_key()
+    try:
+        master_key = get_or_create_master_key()
+    except PermissionError as exc:
+        raise SystemExit(str(exc)) from exc
 
     try:
         return open_main_vault(
@@ -207,8 +224,9 @@ def get_vault(create_if_missing=False):
             device=config.get_device(),
         )
     except PermissionError:
-        print("FATAL: The database has been crypto-shredded and is unrecoverable.")
-        print("  To start fresh, run: shadow remove && shadow install && shadow enable")
+        print("Cannot decrypt the existing vault with the available master key.")
+        print("  Data was not changed. Check Keychain access in an unlocked macOS session;")
+        print("  if the key is truly lost, restore a portable backup into a new destination.")
         sys.exit(1)
     except ValueError as exc:
         if "embedding model" in str(exc):
