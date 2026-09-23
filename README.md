@@ -34,7 +34,9 @@ under `~/.latticeshadow` by default. `make setup` does **not** start background
 capture or edit your shell startup files. The daemon shows as stopped after a
 manual save; that is expected, not a tiny rebellion.
 
-For the slower, more explanatory version, see [Getting started](docs/GETTING_STARTED.md).
+For the complete tour and command reference, read the
+[user manual](docs/USER_MANUAL.md) ([print-ready edition](docs/USER_MANUAL.html)).
+The shorter path is [Getting started](docs/GETTING_STARTED.md).
 If you only want the cross-platform DB package, use `make setup-db` instead;
 the macOS client is not installed on Linux.
 
@@ -42,12 +44,12 @@ the macOS client is not installed on Linux.
 
 | Area | Current state |
 | --- | --- |
-| Manual memory | `shadow remember`, scoped timeline and search, project assignment, and explicit forget are implemented and tested with disposable data. [Integrated synthetic recall](docs/validation/recall-local.md) passed its top-five target; the full Mini performance run is pending. |
+| Manual memory | `shadow remember`, scoped timeline and search, project assignment, and explicit forget are implemented and tested with disposable data. [Integrated synthetic recall](docs/validation/recall-local.md) passed its top-five target; a [10,000-event source run on the Mini](docs/validation/mini-source-performance-2026-09-23.md) met the latency target. Packaged-app timing remains pending. |
 | Background capture | macOS clipboard and terminal capture require explicit source choices and `shadow enable`. Pause persists; literal/source exclusions and optional age retention are implemented. Broader desktop and reboot validation is still in progress. |
 | Assistant access | Local project/source grants restrict a read-only stdio MCP server. An independent MCP SDK test and a synthetic Codex CLI host walkthrough pass. See the [sharing guide](docs/MCP.md). |
 | Database | `latticeshadow-db` installs independently and supports document/vector storage, metadata, retrieval, and optional research indexes. |
-| Desktop and peer features | The menu-bar recall panel is implemented; logged-in guest interaction is still pending. Cross-device sync, autonomous repair, and several retrieval modes remain experimental. |
-| Distribution | Source releases are public. An unsigned integrated Apple Silicon app passed offline save/search and daemon checks in a stripped disposable guest. Upgrade approval, GUI, stock Gatekeeper, signing, and notarization evidence remain open. |
+| Desktop and peer features | The menu-bar Recall panel passed a [logged-in synthetic guest journey](docs/validation/desktop-gui.md) on a prior app candidate; global shortcut behavior and the final styled build remain to be checked. Cross-device sync, autonomous repair, and several retrieval modes remain experimental. |
+| Distribution | Source releases are public. An unsigned integrated Apple Silicon app passed offline save/search, daemon, and logged-in Recall checks in disposable guests. A key-access flaw found in that artifact has been fixed in source and requires a rebuilt check. Upgrade approval, stock Gatekeeper, signing, and notarization evidence remain open. |
 
 See [Capabilities and limits](docs/CAPABILITIES.md) for the evidence and privacy
 boundaries behind this table. The commands above require no LLM account.
@@ -110,6 +112,7 @@ for concrete acceptance criteria.
 
 | If you want to… | Read… |
 | --- | --- |
+| Learn the whole product, including recovery and command details | [User manual](docs/USER_MANUAL.md) or [print-ready edition](docs/USER_MANUAL.html) |
 | Try the CLI, backups, or opt into capture | [Getting started](docs/GETTING_STARTED.md) |
 | Share a chosen slice with an assistant | [MCP sharing guide](docs/MCP.md) |
 | Check a feature's maturity or data boundary | [Capabilities and limits](docs/CAPABILITIES.md) |
@@ -132,8 +135,9 @@ make test-model   # downloads and evaluates the pinned model
 make docs
 ```
 
-CI runs DB tests and documentation checks on Linux. Changes beyond Markdown
-also run CLI tests, the model check, and the native build on macOS. Hardware
+CI runs DB tests and documentation checks on Linux. Its path selector runs the
+macOS CLI suite when client code changes, and adds model, native, or app-bundle
+checks when their inputs change. Documentation-only edits skip macOS. Hardware
 tests that may create temporary Keychain keys are separate: `make test-hardware`.
 Tags on tested `main` commits publish source-only GitHub releases without
 rerunning the macOS suite.

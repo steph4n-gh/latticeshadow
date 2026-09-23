@@ -1,5 +1,8 @@
 # Getting started
 
+For the full guided reference, including the menu bar, backup recovery, and
+every command family, see the [user manual](USER_MANUAL.md).
+
 You can try LatticeShadow without giving it your clipboard, shell history, or
 background time. Save one harmless note, find it, and decide whether the rest is
 useful to you. The daemon can wait; it is very patient.

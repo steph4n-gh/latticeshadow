@@ -8,6 +8,10 @@ from ci_paths import ALL, BUNDLE, MAC, MODEL, NONE, SWIFT, Checks, select
 class PathSelectionTests(unittest.TestCase):
     def test_docs_and_linux_tests_skip_macos(self):
         self.assertEqual(select(["README.md", "docs/ARCHITECTURE.md", "packages/db/tests/test_store.py"]), NONE)
+        self.assertEqual(select([
+            "docs/USER_MANUAL.md", "docs/USER_MANUAL.html", "docs/user-manual.css",
+            "scripts/render_user_manual.sh",
+        ]), NONE)
 
     def test_cli_test_runs_core_only(self):
         self.assertEqual(select(["packages/cli/tests/test_menu.py"]), MAC)

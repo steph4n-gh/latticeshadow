@@ -5,13 +5,16 @@ LatticeShadow CLI Documentation Verification Script.
 1. Recursively parses all `.md` files in the repository (excluding .venv, .agents, etc.).
 2. Extracts and validates all relative file/directory links and internal/cross-file header anchors.
 3. Extracts and validates the syntax of all Python code blocks (```python) using ast.parse.
-4. Exits 0 on success, or 1 on any broken link or syntax error.
+4. Checks that the manual names the core CLI commands and Recall controls
+   that are present in the implementation.
+5. Exits 0 on success, or 1 on any broken link, syntax, or product-reference error.
 """
 
 import os
 import sys
 import re
 import ast
+import hashlib
 import argparse
 from typing import List, Dict, Set, Tuple
 
@@ -155,6 +158,84 @@ def verify_markdown_file(file_path: str, all_anchors: Dict[str, Set[str]]) -> Li
             
     return errors
 
+
+def verify_product_manual(repo_root: str) -> List[str]:
+    """Keep the hand-written manual anchored to shipped command and UI names."""
+    manual_path = os.path.join(repo_root, "docs", "USER_MANUAL.md")
+    cli_path = os.path.join(repo_root, "packages", "cli", "latticeshadow", "shadow_cli.py")
+    menu_path = os.path.join(repo_root, "packages", "cli", "latticeshadow", "menu.py")
+    if not os.path.isfile(manual_path):
+        return ["docs/USER_MANUAL.md: product manual is missing"]
+
+    with open(manual_path, encoding="utf-8") as file:
+        manual = file.read()
+    html_path = os.path.join(repo_root, "docs", "USER_MANUAL.html")
+    with open(manual_path, "rb") as file:
+        manual_sha = hashlib.sha256(file.read()).hexdigest()
+    if not os.path.isfile(html_path):
+        return ["docs/USER_MANUAL.html: print edition is missing"]
+    with open(html_path, encoding="utf-8") as file:
+        html = file.read()
+    if f"<!-- markdown-sha256: {manual_sha} -->" not in html:
+        return ["docs/USER_MANUAL.html: stale print edition; run scripts/render_user_manual.sh"]
+    with open(cli_path, encoding="utf-8") as file:
+        cli_tree = ast.parse(file.read(), filename=cli_path)
+    with open(menu_path, encoding="utf-8") as file:
+        menu_tree = ast.parse(file.read(), filename=menu_path)
+
+    parser_names = {
+        node.args[0].value
+        for node in ast.walk(cli_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_parser"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    top_level_commands = {
+        node.args[0].value
+        for node in ast.walk(cli_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_parser"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "subparsers"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    menu_strings = {
+        node.value
+        for node in ast.walk(menu_tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    errors = []
+    for command in sorted(top_level_commands):
+        if not re.search(rf"`(?:shadow\s+)?{re.escape(command)}(?:\s|`)", manual):
+            errors.append(f"docs/USER_MANUAL.md: add '{command}' to the command reference")
+    core_commands = (
+        "install", "enable", "disable", "remove", "status", "doctor",
+        "consent", "pause", "resume", "remember", "timeline", "why",
+        "assign-project", "forget", "backup", "mcp",
+    )
+    for command in core_commands:
+        if command not in parser_names:
+            errors.append(f"CLI command '{command}' is missing; update the manual and command contract")
+        if not re.search(rf"\bshadow\s+{re.escape(command)}\b", manual):
+            errors.append(f"docs/USER_MANUAL.md: document 'shadow {command}'")
+
+    recall_controls = (
+        "Open Recall…", "Pause capture", "Resume capture", "Copy",
+        "Open link/file", "Assign project", "Forget…", "Unassigned only",
+    )
+    for label in recall_controls:
+        if label not in menu_strings:
+            errors.append(f"Recall control '{label}' is missing; update the manual and UI contract")
+        if label not in manual:
+            errors.append(f"docs/USER_MANUAL.md: document Recall control '{label}'")
+    return errors
+
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description=__doc__)
@@ -189,6 +270,7 @@ def main():
     for f in md_files:
         errors = verify_markdown_file(f, all_anchors)
         all_errors.extend(errors)
+    all_errors.extend(verify_product_manual(repo_root))
         
     print("\nVerification Results:")
     print("──────────────────────────────────────────")
@@ -198,7 +280,7 @@ def main():
             print(f"  - {err}")
         sys.exit(1)
     else:
-        print("\033[92mPASSED: All links, anchors, and Python code blocks are valid!\033[0m")
+        print("\033[92mPASSED: Links, anchors, Python blocks, and product manual references are valid!\033[0m")
         sys.exit(0)
 
 if __name__ == "__main__":

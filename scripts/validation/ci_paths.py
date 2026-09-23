@@ -38,7 +38,11 @@ BUNDLE = Checks(macos=True, bundle=True)
 def classify(path: str) -> Checks:
     if not path or path.startswith("/") or ".." in path.split("/"):
         return ALL
-    if path.endswith(".md") or path.startswith("docs/") and path.endswith((".png", ".svg", ".webp", ".jpg")):
+    if path.endswith(".md") or path.startswith("docs/") and path.endswith(
+        (".png", ".svg", ".webp", ".jpg", ".html", ".css")
+    ):
+        return NONE
+    if path == "scripts/render_user_manual.sh":
         return NONE
     if path in {"LICENSE", "SECURITY.md", "CONTRIBUTING.md", ".gitignore"}:
         return NONE
