@@ -11,6 +11,8 @@ import sys
 import copy
 import json
 import tempfile
+import fcntl
+from contextlib import contextmanager
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -115,6 +117,21 @@ def load_config() -> dict:
         with open(CONFIG_PATH, "rb") as f:
             config = tomllib.load(f)
     return _deep_merge(DEFAULTS, config)
+
+
+@contextmanager
+def mutation_lock():
+    """Serialize config read/modify/write across the CLI, menu and daemon."""
+    os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
+    fd = os.open(os.path.join(LOG_DIR, "config.lock"),
+                 os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def get_data_dir() -> str:
@@ -226,6 +243,11 @@ def set(key: str, value: str) -> None:
     Example: set("memory.provider", "gemini")
     Automatically sets default model when provider changes.
     """
+    with mutation_lock():
+        _set_locked(key, value)
+
+
+def _set_locked(key: str, value: str) -> None:
     config = load_config()
     parts = key.split(".")
 

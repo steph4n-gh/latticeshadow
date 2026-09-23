@@ -654,6 +654,55 @@ def test_capture_pause_persists_without_changing_source_choices(setup_test_env):
     assert consent.capture_enabled("clipboard") is True
 
 
+def test_concurrent_source_change_cannot_undo_pause(setup_test_env, monkeypatch):
+    from latticeshadow import config, consent
+
+    choose_capture_sources(clipboard=True, terminal_history=False)
+    read_started = threading.Event()
+    release_read = threading.Event()
+    pause_done = threading.Event()
+    errors = []
+    original_load = config.load_config
+
+    def blocked_load():
+        cfg = original_load()
+        if threading.current_thread().name == "source-change":
+            read_started.set()
+            if not release_read.wait(5):
+                raise TimeoutError("test did not release source change")
+        return cfg
+
+    monkeypatch.setattr(config, "load_config", blocked_load)
+
+    def change_source():
+        try:
+            consent.set_consent("terminal_history", True)
+        except Exception as exc:
+            errors.append(exc)
+
+    def pause():
+        try:
+            consent.set_paused(True)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            pause_done.set()
+
+    changer = threading.Thread(target=change_source, name="source-change")
+    pauser = threading.Thread(target=pause, name="pause-capture")
+    changer.start()
+    assert read_started.wait(5)
+    pauser.start()
+    assert not pause_done.wait(0.1)
+    release_read.set()
+    changer.join(5)
+    pauser.join(5)
+    assert not changer.is_alive() and not pauser.is_alive() and not errors
+    assert config.get("inputs.paused") is True
+    assert config.get("inputs.terminal_history") is True
+    assert consent.capture_enabled("terminal_history") is False
+
+
 def test_resume_requires_recorded_source_choices(setup_test_env):
     from latticeshadow import config, consent
 

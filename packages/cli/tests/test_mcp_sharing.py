@@ -2,6 +2,7 @@
 
 import io
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -131,6 +132,54 @@ def test_revocation_and_startup_ceiling(scenario):
     assert ask("tools/call", {"name": "latticeshadow.current_context", "arguments": {}})["error"]["message"] == "Sharing grant unavailable"
     assert ask("resources/read", {"uri": CITATION_PREFIX + allowed})["error"]["message"] == "Sharing grant unavailable"
     assert ask("prompts/get", {"name": "recall-with-citations"})["error"]["message"] == "Sharing grant unavailable"
+
+
+def test_concurrent_create_cannot_resurrect_revoked_grant(tmp_path, monkeypatch):
+    import latticeshadow.sharing as sharing
+
+    old = create_grant(tmp_path, projects=["ops"], sources=["manual"])
+    read_started = threading.Event()
+    release_read = threading.Event()
+    revoke_done = threading.Event()
+    errors = []
+    original_read = sharing._read
+
+    def pause_after_read(data_dir):
+        grants = original_read(data_dir)
+        if threading.current_thread().name == "create-grant":
+            read_started.set()
+            if not release_read.wait(5):
+                raise TimeoutError("test did not release grant creation")
+        return grants
+
+    monkeypatch.setattr(sharing, "_read", pause_after_read)
+
+    def create():
+        try:
+            create_grant(tmp_path, projects=["other"], sources=["manual"])
+        except Exception as exc:
+            errors.append(exc)
+
+    def revoke():
+        try:
+            assert revoke_grant(tmp_path, old["id"])
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            revoke_done.set()
+
+    creator = threading.Thread(target=create, name="create-grant")
+    revoker = threading.Thread(target=revoke, name="revoke-grant")
+    creator.start()
+    assert read_started.wait(5)
+    revoker.start()
+    assert not revoke_done.wait(0.1)
+    release_read.set()
+    creator.join(5)
+    revoker.join(5)
+    assert not creator.is_alive() and not revoker.is_alive() and not errors
+    assert load_grant(tmp_path, old["id"]) is None
+    assert len(sharing.list_grants(tmp_path)) == 1
 
 
 def test_no_grant_is_read_only_and_fails_closed(scenario):

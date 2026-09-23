@@ -6,6 +6,8 @@ import json
 import os
 import tempfile
 import uuid
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -71,6 +73,22 @@ def _path(data_dir: str | os.PathLike[str]) -> Path:
     return Path(data_dir) / "sharing_grants.json"
 
 
+@contextmanager
+def _mutation_lock(data_dir: str | os.PathLike[str]):
+    """Keep read/modify/write grant changes ordered across CLI processes."""
+    directory = Path(data_dir)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(directory / "sharing_grants.lock",
+                 os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _read(data_dir: str | os.PathLike[str]) -> list[dict[str, Any]]:
     path = _path(data_dir)
     try:
@@ -116,8 +134,9 @@ def create_grant(data_dir: str | os.PathLike[str], *, projects: list[str | None]
     grant = validate_grant({"id": f"grant_{uuid.uuid4().hex}", "revision": uuid.uuid4().hex,
                             "projects": projects, "sources": sources, "since": since,
                             "until": until, "limit": limit, "created_at": now})
-    grants = _read(data_dir)
-    _write(data_dir, [*grants, grant])
+    with _mutation_lock(data_dir):
+        grants = _read(data_dir)
+        _write(data_dir, [*grants, grant])
     return grant
 
 
@@ -130,11 +149,12 @@ def load_grant(data_dir: str | os.PathLike[str], grant_id: str) -> dict[str, Any
 
 
 def revoke_grant(data_dir: str | os.PathLike[str], grant_id: str) -> bool:
-    grants = _read(data_dir)
-    remaining = [grant for grant in grants if grant["id"] != grant_id]
-    if len(remaining) == len(grants):
-        return False
-    _write(data_dir, remaining)
+    with _mutation_lock(data_dir):
+        grants = _read(data_dir)
+        remaining = [grant for grant in grants if grant["id"] != grant_id]
+        if len(remaining) == len(grants):
+            return False
+        _write(data_dir, remaining)
     from latticeshadow import timeline
     clear = getattr(timeline, "clear_search_cache", None)
     if clear is not None:

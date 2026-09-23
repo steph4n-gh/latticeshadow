@@ -133,13 +133,17 @@ def set_paused(paused: bool) -> dict[str, Any]:
     """Persist the capture pause without changing source choices or consent."""
     if not isinstance(paused, bool):
         raise TypeError("paused must be a bool")
-    if not paused:
-        pending = pending_capture_sources()
-        if pending:
-            raise ValueError("Choose capture sources before resuming: " + ", ".join(pending))
-    cfg = config.load_config()
-    cfg.setdefault("inputs", {})["paused"] = paused
-    config.save_config(cfg)
+    with config.mutation_lock():
+        cfg = config.load_config()
+        if not paused:
+            choices = cfg.get("consent", {}).get("surfaces", {})
+            pending = [name for name in CAPTURE_SOURCES
+                       if not isinstance(choices.get(name), bool)
+                       or choices[name] != bool(_get_nested(cfg, SURFACES[name]["config_key"]))]
+            if pending:
+                raise ValueError("Choose capture sources before resuming: " + ", ".join(pending))
+        cfg.setdefault("inputs", {})["paused"] = paused
+        config.save_config(cfg)
     return consent_status()
 
 
@@ -147,23 +151,25 @@ def set_consent(surface: str, enabled: bool) -> dict[str, Any]:
     if surface not in SURFACES:
         raise ValueError(f"Unknown consent surface: {surface}")
 
-    cfg = config.load_config()
-    consent_cfg = cfg.setdefault("consent", {})
-    consent_cfg.setdefault("version", 1)
-    surfaces_cfg = consent_cfg.setdefault("surfaces", {})
-    surfaces_cfg[surface] = bool(enabled)
-    _set_nested(cfg, SURFACES[surface]["config_key"], bool(enabled))
-    config.save_config(cfg)
+    with config.mutation_lock():
+        cfg = config.load_config()
+        consent_cfg = cfg.setdefault("consent", {})
+        consent_cfg.setdefault("version", 1)
+        surfaces_cfg = consent_cfg.setdefault("surfaces", {})
+        surfaces_cfg[surface] = bool(enabled)
+        _set_nested(cfg, SURFACES[surface]["config_key"], bool(enabled))
+        config.save_config(cfg)
     return consent_status()
 
 
 def mark_completed() -> dict[str, Any]:
-    cfg = config.load_config()
-    consent_cfg = cfg.setdefault("consent", {})
-    consent_cfg["version"] = 1
-    consent_cfg["completed"] = True
-    consent_cfg.setdefault("surfaces", {})
-    config.save_config(cfg)
+    with config.mutation_lock():
+        cfg = config.load_config()
+        consent_cfg = cfg.setdefault("consent", {})
+        consent_cfg["version"] = 1
+        consent_cfg["completed"] = True
+        consent_cfg.setdefault("surfaces", {})
+        config.save_config(cfg)
     return consent_status()
 
 
