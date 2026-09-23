@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- markdown-sha256: aa9aa27344d22e7ada168d732d81b39d0aac91bda581c294fe634dc71cfa0871 -->
+<!-- markdown-sha256: b3e439b61d2fe9159162b3e9efd947f4cfb17fa7e0008e4f31a42d9de85a09d0 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -404,8 +404,10 @@
       new vault, and never merges with or replaces the live vault.
       Inspect reopens that destination without activating capture. The
       printed activation directions are for a fresh macOS profile with
-      no existing LatticeShadow vault or Keychain key. Do not copy it
-      over a populated profile and hope the keys negotiate.</p>
+      no existing LatticeShadow vault or Keychain key. A wrong
+      passphrase exits with an error and leaves no new destination; an
+      existing restored vault is left alone. Do not copy it over a
+      populated profile and hope the keys negotiate.</p>
       <blockquote>
       <p><strong>Recovery rule:</strong> inspect the restored copy
       first. Activation is a deliberate move into an empty profile, not

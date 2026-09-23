@@ -319,7 +319,9 @@ indexes. Restore creates a **new** owner-only directory and key, verifies the
 new vault, and never merges with or replaces the live vault. Inspect reopens
 that destination without activating capture. The printed activation directions
 are for a fresh macOS profile with no existing LatticeShadow vault or Keychain
-key. Do not copy it over a populated profile and hope the keys negotiate.
+key. A wrong passphrase exits with an error and leaves no new destination;
+an existing restored vault is left alone. Do not copy it over a populated
+profile and hope the keys negotiate.
 
 > **Recovery rule:** inspect the restored copy first. Activation is a deliberate
 > move into an empty profile, not an overwrite button.
