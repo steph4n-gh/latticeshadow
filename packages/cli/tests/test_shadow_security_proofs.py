@@ -364,12 +364,9 @@ class TestClaim_AESGCMAuthenticated:
         tampered[len(tampered) // 2] ^= 0xFF  # Flip all bits in one byte
         tampered_enc = prefix + ":" + b64encode(bytes(tampered)).decode()
 
-        # Decryption should fail (return the encrypted string unchanged)
-        result = engine.decrypt_document(tampered_enc)
-        assert result == tampered_enc
-        assert result != plaintext, (
-            "Tampered ciphertext decrypted successfully — authentication broken!"
-        )
+        # Authentication failure must be explicit; backup cannot archive ciphertext as text.
+        with pytest.raises(ValueError, match="Unable to decrypt document"):
+            engine.decrypt_document(tampered_enc)
 
     def test_wrong_key_fails_to_decrypt(self, vault_env):
         """Decryption with the wrong master key must fail."""
@@ -384,10 +381,8 @@ class TestClaim_AESGCMAuthenticated:
         engine_b.generate_key()
 
         encrypted = engine_a.encrypt_document("wrong key test")
-        result = engine_b.decrypt_document(encrypted)
-        assert result != "wrong key test", (
-            "Document decrypted with wrong key — catastrophic key isolation failure!"
-        )
+        with pytest.raises(ValueError, match="Unable to decrypt document"):
+            engine_b.decrypt_document(encrypted)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

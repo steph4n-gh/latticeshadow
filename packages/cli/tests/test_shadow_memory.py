@@ -426,10 +426,14 @@ class TestHotCache:
         
         mock_vault = MagicMock()
         mock_vault.count.return_value = 1
-        mock_vault.search.return_value.documents = ["fresh vault document"]
-        mock_vault.search.return_value.ids = ["fresh"]
-        mock_vault.search.return_value.scores = [0.9]
         monkeypatch.setattr("latticeshadow.shadow_cli.get_vault", lambda: mock_vault)
+        monkeypatch.setattr(
+            "latticeshadow.timeline.search_events",
+            lambda _vault, _query, *, limit: [{
+                "id": "fresh", "text": "fresh vault document",
+                "timestamp": "2026-09-22T12:00:00Z", "score": 0.9,
+            }],
+        )
         
         # Capture stdout for do_search
         from latticeshadow.shadow_cli import do_search

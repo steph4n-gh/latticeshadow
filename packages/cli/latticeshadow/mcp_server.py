@@ -191,7 +191,8 @@ def _call_tool(
         limit = int(arguments.get("limit") or 20)
         query = str(arguments.get("query") or "").strip()
         vault = vault_factory()
-        events = search_events(vault, query, limit=limit) if query else fetch_events(vault, limit=limit)
+        events = (search_events(vault, query, limit=limit) if query
+                  else fetch_events(vault, limit=limit)["events"])
         redacted = [_redact_event(event) for event in events]
         summary = summarize_memory_events(redacted)
         return _text({"query": query or None, **summary, "events": redacted[:5]})
@@ -215,15 +216,17 @@ def _call_tool(
             raise ValueError("confirm must be exactly 'FORGET'")
         if forgetter:
             return _text(forgetter(ids))
-        deleted = forget_events(vault_factory(), ids)
-        return _text({"deleted": deleted, "ids": ids})
+        result = forget_events(vault_factory(), ids)
+        return _text({"deleted": result["canonical_deleted"],
+                      "cleanup_errors": result["cleanup_errors"], "ids": ids})
 
     raise ValueError(f"Unknown tool: {name}")
 
 
 def _read_resource(uri: str, vault_factory: VaultFactory, db_path: str, data_dir: str) -> dict[str, Any]:
     if uri == "latticeshadow://timeline/recent":
-        payload = {"events": [_redact_event(event) for event in fetch_events(vault_factory(), limit=50)]}
+        payload = {"events": [_redact_event(event) for event in
+                              fetch_events(vault_factory(), limit=50)["events"]]}
     elif uri == "latticeshadow://current-context":
         payload = _redact_context(current_context(vault_factory(), limit=20))
     elif uri == "latticeshadow://privacy-report":

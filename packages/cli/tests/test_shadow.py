@@ -7,6 +7,8 @@ import plistlib
 import threading
 import subprocess
 import sqlite3
+import json
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from contextlib import contextmanager
 
@@ -243,9 +245,76 @@ def test_cli_remember_initializes_store_without_capture(setup_test_env):
     assert not os.path.exists(setup_test_env["zshrc_path"])
     from latticeshadow.timeline import fetch_events
 
-    events = fetch_events(cli.get_vault())
+    events = fetch_events(cli.get_vault())["events"]
     assert len(events) == 1
     assert events[0]["text"] == "Check release tests"
+
+
+def test_cli_timeline_scopes_and_explicit_project_assignment(setup_test_env, capsys):
+    from latticeshadow.timeline import fetch_events
+
+    cli = setup_test_env["shadow_cli"]
+    run_cli(cli, ["remember", "note", "deployment rollback", "--project", "ops",
+                  "--timestamp", "2026-09-17T12:00:00Z"])
+    run_cli(cli, ["remember", "note", "deployment rollback", "--project", "other",
+                  "--timestamp", "2026-09-18T12:00:00Z"])
+    run_cli(cli, ["remember", "note", "deployment rollback",
+                  "--timestamp", "2026-09-17T13:00:00Z"])
+    capsys.readouterr()
+
+    events = fetch_events(cli.get_vault())["events"]
+    unassigned_id = next(event["id"] for event in events if event["project"] is None)
+    run_cli(cli, ["timeline", "--query", "deployment", "--project", "ops",
+                  "--source", "note", "--since", "2026-09-17T00:00:00Z",
+                  "--until", "2026-09-18T00:00:00Z", "--json"])
+    result = json.loads(capsys.readouterr().out)
+    assert len(result["events"]) == 1
+    assert result["events"][0]["project"] == "ops"
+    assert result["events"][0]["timestamp"] == "2026-09-17T12:00:00.000000Z"
+
+    run_cli(cli, ["assign-project", "--id", unassigned_id, "--project", "ops"])
+    capsys.readouterr()
+    run_cli(cli, ["timeline", "--unassigned", "--json"])
+    assert json.loads(capsys.readouterr().out)["events"] == []
+
+
+def test_terminal_capture_uses_original_time_and_mirrors_provenance(setup_test_env):
+    from latticeshadow.timeline import get_events
+    from latticeshadow.vaults import open_hot_vault, open_main_vault
+
+    cli = setup_test_env["shadow_cli"]
+    shadowd = setup_test_env["shadowd"]
+    key = cli.get_or_create_master_key()
+    main = open_main_vault(str(setup_test_env["db_path"]), key)
+    hot = open_hot_vault(str(setup_test_env["db_path"]), key)
+    occurred = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+
+    doc_id = shadowd.store_captured_event(
+        main, hot, "terminal", "pytest -q", timestamp=occurred.timestamp(),
+    )
+
+    event = get_events(main, [doc_id])[0]
+    mirror = get_events(hot, [doc_id])[0]
+    assert event["timestamp"] == "2026-09-17T12:00:00.000000Z"
+    assert event["captured_at"] >= event["timestamp"]
+    assert event["source"] == "terminal"
+    assert mirror["metadata"] == event["metadata"]
+    assert mirror["text"] == event["text"]
+
+
+def test_open_context_only_opens_supported_targets(setup_test_env, monkeypatch):
+    cli = setup_test_env["shadow_cli"]
+    monkeypatch.setattr(cli, "get_vault", lambda: object())
+    monkeypatch.setattr(
+        "latticeshadow.timeline.search_events",
+        lambda _vault, _query, *, limit: [
+            {"metadata": {"url": "javascript:alert(1)"}, "text": ""},
+            {"metadata": {"url": "https://example.com/help"}, "text": ""},
+        ],
+    )
+    with patch("subprocess.run") as opener:
+        run_cli(cli, ["open-context", "help"])
+    opener.assert_called_once_with(["open", "https://example.com/help"], check=False)
 
 
 def test_cli_install(setup_test_env, mock_subprocess_run, capsys):
@@ -1010,7 +1079,7 @@ def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup
     key = cli.get_or_create_master_key()
     main = open_main_vault(str(setup_test_env["db_path"]), key)
     hot = open_hot_vault(str(setup_test_env["db_path"]), key)
-    event = fetch_events(main, limit=1)[0]
+    event = fetch_events(main, limit=1)["events"][0]
     assert event["text"] == content
     assert search_events(main, content, limit=1)[0]["id"] == event["id"]
     assert hot.search(content, n_results=1).ids == [event["id"]]
@@ -1027,6 +1096,6 @@ def test_clipboard_memory_survives_restart_and_forget_removes_both_indexes(setup
 
     reopened_main = open_main_vault(str(setup_test_env["db_path"]), key)
     reopened_hot = open_hot_vault(str(setup_test_env["db_path"]), key)
-    assert fetch_events(reopened_main, limit=10) == []
+    assert fetch_events(reopened_main, limit=10)["events"] == []
     assert reopened_main.count() == 0
     assert reopened_hot.count() == 0

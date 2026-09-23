@@ -28,7 +28,33 @@ class FakeVault:
         self.deleted = []
         self.added = []
 
-    def search(self, query, n_results=10, hybrid=False):
+    def _records(self, sql, params):
+        with self._store._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        keys = ("rowid", "doc_id", "document", "metadata_json", "collection",
+                "created_at", "last_accessed")
+        return [dict(zip(keys, row)) for row in rows]
+
+    def scan_records(self, after_row_id=0, limit=500):
+        records = self._records(
+            "SELECT rowid, doc_id, document, metadata_json, collection, created_at, last_accessed "
+            "FROM vectors WHERE collection = ? AND rowid > ? ORDER BY rowid LIMIT ?",
+            (self.name, after_row_id, limit + 1),
+        )
+        page = records[:limit]
+        return page, page[-1]["rowid"] if len(records) > limit else None
+
+    def get_records(self, ids):
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        return self._records(
+            "SELECT rowid, doc_id, document, metadata_json, collection, created_at, last_accessed "
+            f"FROM vectors WHERE collection = ? AND doc_id IN ({placeholders})",
+            (self.name, *ids),
+        )
+
+    def search(self, query, n_results=10, hybrid=False, candidate_ids=None):
         self.search_calls.append((query, n_results, hybrid))
         return SimpleNamespace(
             ids=["clip_1"],
@@ -89,7 +115,7 @@ def test_timeline_fetch_and_search_normalizes_existing_rows(tmp_path):
     _make_timeline_db(db_path)
     vault = FakeVault(db_path)
 
-    terminal = fetch_events(vault, limit=5, source="terminal")
+    terminal = fetch_events(vault, limit=5, scope={"sources": ["terminal"]})["events"]
     assert len(terminal) == 1
     assert terminal[0]["type"] == "terminal"
     assert terminal[0]["text"] == "pytest -q"
@@ -365,6 +391,11 @@ def test_cli_forget_deletes_hot_mirror_when_present(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(shadow_cli, "get_db_path", lambda: str(tmp_path / "shadow.sqlite"))
     monkeypatch.setattr(shadow_cli, "get_log_dir", lambda: str(tmp_path))
     monkeypatch.setattr(shadow_cli.config, "get_device", lambda: "cpu")
+    def fake_forget(vault, ids):
+        vault.delete(ids)
+        return {"canonical_deleted": 1, "derived_invalidated": True,
+                "cleanup_errors": []}
+    monkeypatch.setattr("latticeshadow.timeline.forget_events", fake_forget)
 
     args = SimpleNamespace(id=["clip_1"], query=None, source=None, limit=10, yes=True)
     shadow_cli.do_forget(args)

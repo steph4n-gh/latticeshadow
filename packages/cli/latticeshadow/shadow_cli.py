@@ -7,6 +7,7 @@ import plistlib
 import time
 import json
 import shlex
+from urllib.parse import unquote, urlsplit
 from datetime import datetime
 
 # Ensure the parent directory is in sys.path to import latticeshadow_db
@@ -240,6 +241,8 @@ def _print_json(payload):
 # ── Core Commands ─────────────────────────────────────────────────────────────
 
 def do_search(query, paste_mode=False):
+    from latticeshadow.timeline import search_events
+
     try:
         vault = get_vault()
         if not vault or vault.count() == 0:
@@ -251,29 +254,29 @@ def do_search(query, paste_mode=False):
     if not paste_mode:
         print(f"Searching for '{query}'...")
     try:
-        res = vault.search(query, n_results=5, hybrid=True)
-        if not res or not res.documents:
+        events = search_events(vault, query, limit=5)
+        if not events:
             print("No matching memories found.")
             return
 
         if paste_mode:
             # Copy the top result back to the clipboard and exit
-            top_doc = res.documents[0]
+            top_doc = events[0]["text"]
             subprocess.run(["pbcopy"], input=top_doc.encode("utf-8"), check=True)
             # Truncate for display
             display = top_doc if len(top_doc) <= 120 else top_doc[:120] + "..."
             print(f"✓ Copied to clipboard: {display}")
             return
 
-        for i, doc in enumerate(res.documents):
-            score = res.scores[i] if hasattr(res, 'scores') and res.scores else 0.0
-            doc_id = res.ids[i] if hasattr(res, 'ids') and res.ids else ""
-            ts = _ts_from_doc_id(doc_id)
+        for i, event in enumerate(events):
+            doc = event["text"]
+            score = event.get("score", 0.0)
+            ts = event.get("timestamp", "")
             ts_str = f"  \033[90m({ts})\033[0m" if ts else ""
 
             # Truncate long entries for display
             display = doc if len(doc) <= 200 else doc[:200] + "..."
-            print(f"\n\033[96m--- Result {i+1} (Score: {score:.4f}){ts_str} ---\033[0m")
+            print(f"\n\033[96m--- Result {i+1} (ranking score: {score:.4f}){ts_str} ---\033[0m")
             print(display)
     except Exception as exc:
         raise SystemExit(f"Search failed: {exc}") from exc
@@ -751,21 +754,30 @@ def do_timeline(args):
     from latticeshadow.timeline import fetch_events, search_events, summarize_events
 
     vault = get_vault()
+    scope = {
+        "projects": ([None] if args.unassigned else [args.project]
+                     if args.project is not None else None),
+        "sources": [args.source] if args.source else None,
+        "since": args.since,
+        "until": args.until,
+    }
     if args.query:
-        events = search_events(vault, args.query, limit=args.limit)
+        if args.cursor:
+            raise SystemExit("--cursor is available for recent timeline pages only")
+        events = search_events(vault, args.query, scope=scope, limit=args.limit)
+        next_cursor = None
     else:
-        events = fetch_events(
-            vault,
-            limit=args.limit,
-            source=args.source,
-            since=args.since,
-            until=args.until,
-        )
+        page = fetch_events(vault, scope=scope, limit=args.limit, cursor=args.cursor)
+        events = page["events"]
+        next_cursor = page["next_cursor"]
 
     if args.json:
-        _print_json({"summary": summarize_events(events), "events": events})
+        _print_json({"summary": summarize_events(events), "events": events,
+                     "next_cursor": next_cursor})
         return
     _print_event_lines(events)
+    if next_cursor:
+        print(f"Next cursor (repeat the same filters): {next_cursor}")
 
 
 def do_remember(args):
@@ -778,8 +790,15 @@ def do_remember(args):
         except json.JSONDecodeError as exc:
             print(f"Invalid metadata JSON: {exc}")
             return
+        if not isinstance(metadata, dict):
+            raise SystemExit("--metadata must be a JSON object")
     vault = get_vault(create_if_missing=True)
-    doc_id = add_event(vault, args.event_type, args.text, metadata=metadata, doc_id=args.id)
+    doc_id = add_event(
+        vault, args.event_type, args.text,
+        source=args.source or args.event_type,
+        timestamp=args.timestamp, project=args.project,
+        metadata=metadata, doc_id=args.id,
+    )
     try:
         from latticeshadow.audit_log import append_audit_event
 
@@ -797,13 +816,24 @@ def do_remember(args):
     print(doc_id)
 
 
+def do_assign_project(args):
+    """Attach an explicit project label to selected existing events."""
+    from latticeshadow.timeline import assign_project
+
+    changed = assign_project(
+        get_vault(), list(dict.fromkeys(args.id)),
+        None if args.unassigned else args.project,
+    )
+    print(f"Updated project for {changed} memory event(s).")
+
+
 def do_why(args):
     """Explain why a query is relevant by showing matching memory context."""
     from latticeshadow.timeline import fetch_events, format_event, search_events
 
     vault = get_vault()
     matches = search_events(vault, args.query, limit=args.limit)
-    recent = fetch_events(vault, limit=min(5, args.limit))
+    recent = fetch_events(vault, limit=min(5, args.limit))["events"]
 
     if not matches:
         print("No matching memory events found.")
@@ -824,7 +854,8 @@ def do_summarize(args):
     from latticeshadow.timeline import fetch_events, search_events
 
     vault = get_vault()
-    events = search_events(vault, args.query, limit=args.limit) if args.query else fetch_events(vault, limit=args.limit)
+    events = (search_events(vault, args.query, limit=args.limit) if args.query
+              else fetch_events(vault, limit=args.limit)["events"])
     payload = summarize_memory_events(events, prefer_foundation=not args.no_foundation)
     if args.json:
         _print_json({**payload, "events": events[:5]})
@@ -841,11 +872,20 @@ def do_open_context(args):
     for event in events:
         target = open_target(event)
         if target:
+            parsed = urlsplit(target)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                action = ["open", target]
+            elif parsed.scheme == "file" and parsed.netloc in ("", "localhost"):
+                action = ["open", "-R", unquote(parsed.path)]
+            elif not parsed.scheme and os.path.isabs(target):
+                action = ["open", "-R", target]
+            else:
+                continue
             print(target)
             if not args.dry_run:
-                subprocess.run(["open", target], check=False)
+                subprocess.run(action, check=False)
             return
-    print("No openable URL or file path found for that query.")
+    print("No supported web URL or absolute local file path found for that query.")
 
 
 def do_forget(args):
@@ -855,11 +895,19 @@ def do_forget(args):
     vault = get_vault()
     ids = list(args.id or [])
     selected_events = []
+    scope = {
+        "projects": ([None] if getattr(args, "unassigned", False)
+                     else [args.project] if getattr(args, "project", None) is not None
+                     else None),
+        "sources": [args.source] if args.source else None,
+        "since": getattr(args, "since", None),
+        "until": getattr(args, "until", None),
+    }
 
     if args.query:
-        selected_events.extend(search_events(vault, args.query, limit=args.limit))
-    elif args.source:
-        selected_events.extend(fetch_events(vault, limit=args.limit, source=args.source))
+        selected_events.extend(search_events(vault, args.query, scope=scope, limit=args.limit))
+    elif args.source or getattr(args, "project", None) is not None or getattr(args, "unassigned", False):
+        selected_events.extend(fetch_events(vault, scope=scope, limit=args.limit)["events"])
 
     ids.extend(event["id"] for event in selected_events if event.get("id"))
     ids = list(dict.fromkeys(ids))
@@ -878,8 +926,10 @@ def do_forget(args):
             print("Aborted.")
             return
 
-    deleted = forget_events(vault, ids)
+    result = forget_events(vault, ids)
+    deleted = result["canonical_deleted"]
     hot_deleted = None
+    errors = list(result["cleanup_errors"])
     if hot_collection_exists(get_db_path()):
         try:
             hot_vault = open_hot_vault(
@@ -888,14 +938,16 @@ def do_forget(args):
                 device=config.get_device(),
                 strategy=HOT_INDEX_STRATEGY,
             )
-            hot_deleted = forget_events(hot_vault, ids)
+            hot_result = forget_events(hot_vault, ids)
+            hot_deleted = hot_result["canonical_deleted"]
+            errors.extend(hot_result["cleanup_errors"])
         except Exception as exc:
-            print(f"Warning: Hot index forget failed: {exc}")
+            errors.append(f"Hot index forget failed: {exc}")
     if deleted:
         try:
             invalidate_holographic_indexes(get_log_dir())
         except OSError as exc:
-            print(f"Warning: Could not remove a derived memory index: {exc}")
+            errors.append(f"Could not remove a derived memory index: {exc}")
     try:
         from latticeshadow.pot_chain import PoTChain
 
@@ -916,6 +968,8 @@ def do_forget(args):
     if hot_deleted is not None:
         message += f" Hot index deleted {hot_deleted} mirrored event(s)."
     print(message)
+    if errors:
+        raise SystemExit("Forget incomplete: " + "; ".join(errors))
 
 
 def do_privacy_report(args):
@@ -983,8 +1037,9 @@ def do_mcp(args):
         from latticeshadow.timeline import forget_events
 
         def forget_all_stores(ids):
-            main_deleted = forget_events(get_vault(), ids)
-            payload = {"deleted": main_deleted, "ids": ids}
+            main_result = forget_events(get_vault(), ids)
+            payload = {"deleted": main_result["canonical_deleted"],
+                       "cleanup_errors": list(main_result["cleanup_errors"]), "ids": ids}
             if hot_collection_exists(get_db_path()):
                 try:
                     hot_vault = open_hot_vault(
@@ -993,10 +1048,12 @@ def do_mcp(args):
                         device=config.get_device(),
                         strategy=HOT_INDEX_STRATEGY,
                     )
-                    payload["hot_deleted"] = forget_events(hot_vault, ids)
+                    hot_result = forget_events(hot_vault, ids)
+                    payload["hot_deleted"] = hot_result["canonical_deleted"]
+                    payload["cleanup_errors"].extend(hot_result["cleanup_errors"])
                 except Exception as exc:
                     payload["hot_error"] = str(exc)
-            if main_deleted:
+            if main_result["canonical_deleted"]:
                 try:
                     invalidate_holographic_indexes(get_log_dir())
                 except OSError as exc:
@@ -2129,6 +2186,7 @@ def main():
   now             Show current private memory context
   timeline        Show a recent or searched memory timeline
   remember        Add a normalized memory event
+  assign-project  Set or clear an explicit project label on saved events
   why <query>     Explain relevance with matching memory events
   summarize       Summarize current or searched memory context
   open-context    Open a URL/file target from matching context
@@ -2182,20 +2240,33 @@ def main():
     timeline_p = subparsers.add_parser("timeline", help="Show a recent or searched memory timeline")
     timeline_p.add_argument("--limit", type=int, default=20, help="Number of events to show")
     timeline_p.add_argument("--source", type=str, help="Filter by event source/type")
-    timeline_p.add_argument("--since", type=str, help="Only events after this SQLite timestamp/date")
-    timeline_p.add_argument("--until", type=str, help="Only events before this SQLite timestamp/date")
+    timeline_project = timeline_p.add_mutually_exclusive_group()
+    timeline_project.add_argument("--project", type=str, help="Filter by explicit project label")
+    timeline_project.add_argument("--unassigned", action="store_true", help="Only events without a project")
+    timeline_p.add_argument("--since", type=str, help="Include events at or after this timezone-aware time")
+    timeline_p.add_argument("--until", type=str, help="Exclude events at or after this timezone-aware time")
     timeline_p.add_argument("--query", type=str, help="Semantic search query")
+    timeline_p.add_argument("--cursor", type=str, help="Continue a recent timeline page")
     timeline_p.add_argument("--json", action="store_true", help="Emit JSON")
 
     remember_p = subparsers.add_parser("remember", help="Add a normalized memory event")
     remember_p.add_argument(
         "event_type",
-        choices=["clipboard", "terminal", "ambient", "file", "url", "app", "repair", "sync", "model_call"],
+        choices=["clipboard", "terminal", "note", "ambient", "file", "url", "app", "repair", "sync", "model_call"],
         help="Event type",
     )
     remember_p.add_argument("text", type=str, help="Event text")
     remember_p.add_argument("--metadata", type=str, help="Additional metadata JSON")
     remember_p.add_argument("--id", type=str, help="Explicit document id")
+    remember_p.add_argument("--source", type=str, help="Source label, defaults to event type")
+    remember_p.add_argument("--project", type=str, help="Explicit project label")
+    remember_p.add_argument("--timestamp", type=str, help="Original event time with timezone")
+
+    assign_p = subparsers.add_parser("assign-project", help="Assign or clear a saved event's project")
+    assign_p.add_argument("--id", action="append", required=True, help="Memory event id; repeat for several")
+    assign_choice = assign_p.add_mutually_exclusive_group(required=True)
+    assign_choice.add_argument("--project", type=str, help="Explicit project label")
+    assign_choice.add_argument("--unassigned", action="store_true", help="Clear the project label")
 
     why_p = subparsers.add_parser("why", help="Show matching memory events for a query")
     why_p.add_argument("query", type=str, help="Semantic query")
@@ -2216,6 +2287,11 @@ def main():
     forget_p.add_argument("--id", action="append", help="Memory document id to delete")
     forget_p.add_argument("--query", type=str, help="Delete top matches for a semantic query")
     forget_p.add_argument("--source", type=str, help="Delete recent events from a source/type")
+    forget_project = forget_p.add_mutually_exclusive_group()
+    forget_project.add_argument("--project", type=str, help="Select recent events from this project")
+    forget_project.add_argument("--unassigned", action="store_true", help="Select recent unassigned events")
+    forget_p.add_argument("--since", type=str, help="Select events at or after this timezone-aware time")
+    forget_p.add_argument("--until", type=str, help="Select events before this timezone-aware time")
     forget_p.add_argument("--limit", type=int, default=10, help="Maximum events selected by query/source")
     forget_p.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
 
@@ -2373,6 +2449,7 @@ def main():
         "now": lambda: do_now(args),
         "timeline": lambda: do_timeline(args),
         "remember": lambda: do_remember(args),
+        "assign-project": lambda: do_assign_project(args),
         "why": lambda: do_why(args),
         "summarize": lambda: do_summarize(args),
         "open-context": lambda: do_open_context(args),

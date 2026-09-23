@@ -282,6 +282,25 @@ def mirror_to_hot_vault(hot_vault, document: str, doc_id: str, metadata: dict) -
         logger.warning("Hot index mirror failed for %s: %s", doc_id, e)
 
 
+def store_captured_event(vault, hot_vault, event_type: str, text: str, *,
+                         timestamp=None, metadata: dict | None = None) -> str:
+    """Commit canonical capture first, then best-effort mirror its normalized form."""
+    from latticeshadow.timeline import add_event, get_events
+
+    doc_id = add_event(
+        vault, event_type, text, source=event_type,
+        timestamp=timestamp, metadata=metadata,
+    )
+    chmod_collection_files(vault)
+    if hot_vault:
+        try:
+            event = get_events(vault, [doc_id])[0]
+            mirror_to_hot_vault(hot_vault, event["text"], doc_id, event["metadata"])
+        except Exception as exc:
+            logger.warning("Hot index mirror pending repair for %s: %s", doc_id, exc)
+    return doc_id
+
+
 def run_daemon():
     pending = consent.pending_capture_sources()
     if pending:
@@ -448,19 +467,7 @@ def run_daemon():
                     content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
                     if content_hash != last_content_hash:
                         last_content_hash = content_hash
-                        doc_id = f"clip_{int(time.time() * 1000)}"
-                        vault.add(
-                            documents=[content],
-                            ids=[doc_id],
-                            metadatas=[{"source": "clipboard"}],
-                        )
-                        chmod_collection_files(vault)
-                        mirror_to_hot_vault(
-                            hot_vault,
-                            content,
-                            doc_id,
-                            {"source": "clipboard"},
-                        )
+                        doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
                         if pot_chain:
                             pot_chain.append_event("clipboard", content)
                         try:
@@ -630,19 +637,7 @@ def run_daemon():
                             else:
                                 if content_hash != last_content_hash:
                                     last_content_hash = content_hash
-                                    doc_id = f"clip_{int(time.time() * 1000)}"
-                                    vault.add(
-                                        documents=[content],
-                                        ids=[doc_id],
-                                        metadatas=[{"source": "clipboard"}]
-                                    )
-                                    chmod_collection_files(vault)
-                                    mirror_to_hot_vault(
-                                        hot_vault,
-                                        content,
-                                        doc_id,
-                                        {"source": "clipboard"},
-                                    )
+                                    doc_id = store_captured_event(vault, hot_vault, "clipboard", content)
                                     if pot_chain:
                                         pot_chain.append_event("clipboard", content)
                                     try:
@@ -715,24 +710,9 @@ def run_daemon():
                         for i, cmd in enumerate(new_cmds):
                             cmd_text = cmd["text"]
                             cmd_ts = cmd["timestamp"]
-                            doc_id = f"cmd_{int(time.time() * 1000)}_{i}"
-                            vault.add(
-                                documents=[cmd_text],
-                                ids=[doc_id],
-                                metadatas=[{
-                                    "source": "terminal",
-                                    "timestamp": cmd_ts
-                                }]
-                            )
-                            chmod_collection_files(vault)
-                            mirror_to_hot_vault(
-                                hot_vault,
-                                cmd_text,
-                                doc_id,
-                                {
-                                    "source": "terminal",
-                                    "timestamp": cmd_ts
-                                },
+                            doc_id = store_captured_event(
+                                vault, hot_vault, "terminal", cmd_text,
+                                timestamp=cmd_ts,
                             )
                             if pot_chain:
                                 pot_chain.append_event("terminal", cmd_text)
