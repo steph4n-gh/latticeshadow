@@ -72,6 +72,8 @@ def vault_file_paths(db_path: str, collection: str = MAIN_COLLECTION) -> list[st
         db_path + "-shm",
         f"{db_path}_{collection}_vectors.bin",
         f"{db_path}_{collection}_vectors.bin.lock",
+        f"{db_path}_{collection}_vectors.meta.json",
+        f"{db_path}_{collection}_vectors.meta.json.tmp",
         f"{db_path}_{collection}_rerank_vectors.bin",
         f"{db_path}_{collection}_rerank_vectors.bin.lock",
         f"{db_path}_{collection}_pq_codes.bin",

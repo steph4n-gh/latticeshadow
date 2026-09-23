@@ -216,7 +216,7 @@ class VectorStore:
 
         self._init_db()
         self._load_from_db()
-        self._observed_revision = self.revision()
+        self._observed_revision = self._loaded_revision
 
     def _get_drosophila_hasher(self, dim: int):
         if not hasattr(self, "_drosophila_hasher") or self._drosophila_hasher is None:
@@ -259,6 +259,40 @@ class VectorStore:
                     f.close()
                 except Exception:
                     pass
+
+    def _vector_manifest_path(self) -> str:
+        return f"{self.db_path}_{self.collection}_vectors.meta.json"
+
+    def _vector_manifest(self) -> Optional[dict]:
+        try:
+            with open(self._vector_manifest_path(), "r", encoding="utf-8") as handle:
+                value = json.load(handle)
+            return value if isinstance(value, dict) else None
+        except (OSError, ValueError):
+            return None
+
+    def _invalidate_vector_manifest(self) -> None:
+        try:
+            os.unlink(self._vector_manifest_path())
+        except FileNotFoundError:
+            pass
+
+    def _write_vector_manifest(self, revision: int) -> None:
+        path = self._vector_manifest_path()
+        temporary = path + ".tmp"
+        value = {"revision": revision, "count": len(self._doc_ids),
+                 "dimension": self._memmap_dim, "drosophila": self._store_drosophila}
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _ensure_memmap(self):
         """Sync memmap capacity with the physical file size on disk if modified externally."""
@@ -1432,6 +1466,7 @@ class VectorStore:
         """Write a PyTorch tensor to the memmap at a given row index, growing capacity if needed."""
         if idx < 0:
             raise IndexError("Index must be non-negative.")
+        self._invalidate_vector_manifest()
         dim = vec.view(-1).shape[0]
         if self._memmap is None:
             self._init_memmap(dim)
@@ -1796,12 +1831,18 @@ class VectorStore:
     def _load_from_db(self, *, force_rebuild: bool = False):
         """Load all vectors for this collection into memory."""
         with self._connect() as conn:
+            conn.execute("BEGIN")
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT doc_id, vector_blob, entropy FROM vectors WHERE collection = ? ORDER BY id",
                 (self.collection,)
             )
             rows = cursor.fetchall()
+            revision_row = conn.execute(
+                "SELECT revision FROM collection_revision WHERE name = ?", (self.collection,)
+            ).fetchone()
+            snapshot_revision = int(revision_row[0]) if revision_row else 0
+        self._loaded_revision = snapshot_revision
 
         self._doc_ids = []
         self._entropies = []
@@ -1814,10 +1855,22 @@ class VectorStore:
                 self._doc_id_set.add(doc_id)
 
         N = len(self._doc_ids)
-        if force_rebuild and N == 0 and self._memmap is not None:
-            with self._lock_file(shared=False):
-                self._memmap[:] = 0
-                self._memmap.flush()
+        manifest = self._vector_manifest()
+        if N == 0:
+            if self._memmap is not None:
+                with self._lock_file(shared=False):
+                    self._memmap[:] = 0
+                    self._memmap.flush()
+                self._memmap = None
+            self._memmap_capacity = 0
+            self._memmap_dim = None
+            self._invalidate_vector_manifest()
+            filepath = f"{self.db_path}_{self.collection}_vectors.bin"
+            try:
+                os.unlink(filepath)
+            except FileNotFoundError:
+                pass
+            self._write_vector_manifest(snapshot_revision)
         if N > 0:
             first_vec = self._blob_to_vector(rows[0][1])
             dim = first_vec.view(-1).shape[0]
@@ -1829,23 +1882,26 @@ class VectorStore:
             bytes_per_elem = 1 if self._store_drosophila else 4
             dtype = 'uint8' if self._store_drosophila else 'float32'
             row_bytes = dim * bytes_per_elem
+            expected_manifest = {"revision": snapshot_revision, "count": N,
+                                 "dimension": dim, "drosophila": self._store_drosophila}
+            if manifest != expected_manifest:
+                force_rebuild = True
             
             need_recreate = True
-            if os.path.exists(filepath) and not force_rebuild:
+            if os.path.exists(filepath):
                 try:
                     actual_size = os.path.getsize(filepath)
                     if row_bytes > 0 and actual_size > 0 and actual_size % row_bytes == 0:
                         file_capacity = actual_size // row_bytes
                         if file_capacity >= N:
-                            self._memmap_dim = dim
-                            self._memmap_capacity = file_capacity
-                            self._memmap = np.memmap(
-                                filepath,
-                                dtype=dtype,
-                                mode='r+',
-                                shape=(file_capacity, dim),
-                            )
-                            need_recreate = False
+                            capacity = max(capacity, file_capacity)
+                            if not force_rebuild:
+                                self._memmap_dim = dim
+                                self._memmap_capacity = file_capacity
+                                self._memmap = np.memmap(
+                                    filepath, dtype=dtype, mode='r+', shape=(file_capacity, dim),
+                                )
+                                need_recreate = False
                         else:
                             logger.warning(
                                 "Memmap file has capacity %d for %d rows. Recreating and self-healing.",
@@ -1858,6 +1914,9 @@ class VectorStore:
                     logger.warning(f"Error opening memmap: {e}. Recreating.")
             
             if need_recreate:
+                if self._memmap is not None:
+                    self._memmap.flush()
+                    self._memmap = None
                 try:
                     if os.path.exists(filepath):
                         os.remove(filepath)
@@ -1867,6 +1926,7 @@ class VectorStore:
                 for idx, (doc_id, blob, entropy) in enumerate(rows):
                     vec = self._blob_to_vector(blob)
                     self._set_vector_at(idx, vec)
+                self._write_vector_manifest(snapshot_revision)
                     
             if self._diskann_rerank_enabled:
                 if not self._open_diskann_memmaps(dim):
@@ -1903,7 +1963,7 @@ class VectorStore:
         if self._native_hnsw_enabled:
             self._invalidate_hnswlib_index(remove_sidecar=True)
         self._load_from_db(force_rebuild=True)
-        self._observed_revision = self.revision()
+        self._observed_revision = self._loaded_revision
 
 
     # ── Insert ─────────────────────────────────────────────────────────────
@@ -2031,6 +2091,7 @@ class VectorStore:
         current_revision = self.revision()
         if current_revision == start_revision + 1:
             self._observed_revision = current_revision
+            self._write_vector_manifest(current_revision)
         else:
             self._refresh_if_changed()
 
@@ -2208,6 +2269,8 @@ class VectorStore:
         current_revision = self.revision()
         if inserted_count == len(rows) and current_revision == start_revision + inserted_count:
             self._observed_revision = current_revision
+            if rows:
+                self._write_vector_manifest(current_revision)
         else:
             self._refresh_if_changed()
 
@@ -3464,6 +3527,7 @@ class VectorStore:
     def delete(self, doc_ids: List[str]) -> int:
         """Delete documents by ID. Returns count deleted."""
         self._refresh_if_changed()
+        start_revision = self._observed_revision
         to_delete = set(doc_ids) & self._doc_id_set
         if not to_delete:
             return 0
@@ -3499,10 +3563,11 @@ class VectorStore:
         # Remove from SQLite
         with self._connect() as conn:
             placeholders = ",".join("?" * len(to_delete))
-            conn.execute(
+            deleted = conn.execute(
                 f"DELETE FROM vectors WHERE doc_id IN ({placeholders}) AND collection = ?",
                 list(to_delete) + [self.collection]
             )
+            deleted_count = deleted.rowcount
             conn.execute(
                 f"DELETE FROM sparse_index WHERE doc_id IN ({placeholders}) AND collection = ?",
                 list(to_delete) + [self.collection]
@@ -3572,6 +3637,13 @@ class VectorStore:
         if self._diskann_rerank_enabled:
             self._rebuild_diskann_sidecars()
         self._rebuild_faiss()
+
+        current_revision = self.revision()
+        if deleted_count == len(to_delete) and current_revision == start_revision + deleted_count:
+            self._observed_revision = current_revision
+            self._write_vector_manifest(current_revision)
+        else:
+            self._refresh_if_changed()
 
         return len(to_delete)
 
