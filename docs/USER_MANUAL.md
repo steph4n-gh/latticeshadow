@@ -422,7 +422,7 @@ These actions have different effects:
 | `shadow disable` | Stop the launch agent and keep it off across logins; memories remain. |
 | `shadow forget --id ID` | Delete selected live events after confirmation; check any index-cleanup warning. |
 | `shadow remove` | Stop the agent, remove its plist and optional marked shell hook, then ask whether to delete `~/.latticeshadow`. Default **No** preserves data and key. |
-| `shadow shred` | Destructive crypto-shred path for local history and keys. Read the command and keep a recoverable backup only if that is your intent. |
+| `shadow shred` | Destructive crypto-shred path for the local vault. It reports Keychain entry removal separately; a locked Keychain can leave that entry behind. Read the command and keep a recoverable backup only if that is your intent. |
 
 For source installation, `shadow remove` does not delete the Git checkout or
 `.venv`; remove those separately if you want the development files gone. Do not
@@ -509,7 +509,7 @@ first-run checklist.
 | `native intents` | Print the optional native companion's App Intents command contract. |
 | `bench moonshot` | Synthetic retrieval benchmark with selected engines; not a user-data performance guarantee. |
 | `sleep` | Experimental REM-style consolidation. May involve a configured LLM. |
-| `shred` | Destructive local crypto-shred path; inspect before using. |
+| `shred` | Destructive local crypto-shred path; Keychain cleanup is reported separately. |
 | `calibrate` | Experimental alignment/drift check (`--check`). |
 | `compile` / `recall QUERY` | Experimental holographic daily index and query; distinct from ordinary `timeline` recall. |
 | `unswap QUERY` | Experimental state restoration from remembered context. |

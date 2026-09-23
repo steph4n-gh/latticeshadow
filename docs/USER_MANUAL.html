@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- markdown-sha256: b3e439b61d2fe9159162b3e9efd947f4cfb17fa7e0008e4f31a42d9de85a09d0 -->
+<!-- markdown-sha256: 62ed83be34b049341d1cea7a9cdabc8d9b491a2f27531f5b5ac04d0457d56ea7 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -563,9 +563,10 @@
       </tr>
       <tr>
       <td><code>shadow shred</code></td>
-      <td>Destructive crypto-shred path for local history and keys. Read
-      the command and keep a recoverable backup only if that is your
-      intent.</td>
+      <td>Destructive crypto-shred path for the local vault. It reports
+      Keychain entry removal separately; a locked Keychain can leave
+      that entry behind. Read the command and keep a recoverable backup
+      only if that is your intent.</td>
       </tr>
       </tbody>
       </table>
@@ -905,8 +906,8 @@
       </tr>
       <tr>
       <td><code>shred</code></td>
-      <td>Destructive local crypto-shred path; inspect before
-      using.</td>
+      <td>Destructive local crypto-shred path; Keychain cleanup is
+      reported separately.</td>
       </tr>
       <tr>
       <td><code>calibrate</code></td>
