@@ -103,3 +103,24 @@ out-of-box minimal macOS install or stock Gatekeeper behavior. The build guest
 had no Developer ID Application signing identity, and no notarization credential
 environment variables were present. Signed/notarized first-launch validation
 remains pending.
+
+## Final alpha candidate
+
+The later 0.2.0 candidate from source commit
+`d1c3e3bb7ac2c0b0c272bc9ebddb8ad963c10b27` produced a 425,565,684-byte
+ZIP with SHA-256
+`9299111d69af2d1fa0ee573d44679af0b861002aafe1fa21705976fffa4c66d8`.
+The app verifier passed its offline model/resource smoke check, ad-hoc
+signature and 307 Mach-O link checks. In a stripped CI-base guest, offline
+manual save/search, explicit launchd enable/disable/remove, clipboard
+preexisting-value exclusion and later-copy capture passed. A normal guest
+reboot preserved consent and pause state; default removal preserved the key
+and vault. A locked Keychain caused a prompt CLI failure without changing an
+existing nonraw key file or populated vault.
+
+Headless access to a Keychain-wrapped key remains unavailable without an
+interactive login approval. The final styled GUI journey, successful
+0.1.0-to-0.2.0 decryption, stock Gatekeeper first launch, Developer ID signing,
+and notarization are still pending. See the
+[exact-artifact validation report](../../../docs/validation/packaged-app-2026-09-23.md)
+for the observations, including the abrupt Tart-stop pause discrepancy.

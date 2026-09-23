@@ -2,7 +2,9 @@
 
 Measured local runs: [retrieval relevance](recall-local.md),
 [15-minute driver smoke](local-smoke-2026-09-23.md), and
-[10,000-event local precheck](local-performance-2026-09-23.md). Each report
+[10,000-event local precheck](local-performance-2026-09-23.md). The
+[packaged macOS app report](packaged-app-2026-09-23.md) records the exact
+installed alpha archive and its remaining release gates. Each report
 states which candidate and gate it covers; the latter two are preparatory
 checks, not the final Mini or installed-app result.
 
