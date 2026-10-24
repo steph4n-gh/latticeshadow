@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":approveMajorUpdates"],
+  "enabledManagers": ["pep621", "pip_requirements"],
+  "includePaths": [
+    "packages/cli/pyproject.toml",
+    "packages/db/pyproject.toml",
+    "requirements-dev.txt"
+  ],
+  "dependencyDashboard": true,
+  "automerge": false,
+  "prConcurrentLimit": 2,
+  "prHourlyLimit": 2,
+  "vulnerabilityAlerts": {
+    "automerge": false,
+    "prConcurrentLimit": 2
+  }
+}
